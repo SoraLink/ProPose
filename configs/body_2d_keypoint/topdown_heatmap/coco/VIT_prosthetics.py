@@ -16,7 +16,7 @@ DATA_MODE = 'topdown'
 TRAIN_ANN = os.path.join(DATA_ROOT, 'pros_annotations/labels_train_final.json')
 VAL_ANN =   os.path.join(DATA_ROOT, 'pros_annotations/labels_val_final.json')
 TEST_ANN =  os.path.join(DATA_ROOT, 'pros_annotations/labels_test_final.json')
-
+randomness = dict(seed=42, deterministic=False)
 # ==============================================================================
 # 1. Custom Imports (必须导入 Dataset!)
 # ==============================================================================
@@ -33,7 +33,7 @@ custom_imports = dict(
 # 2. Decoder Config
 # ==============================================================================
 codec = dict(
-    type='MSRAHeatmap',
+    type='UDPHeatmap',
     input_size=(192, 256),
     heatmap_size=(48, 64),
     sigma=2.0
@@ -45,35 +45,30 @@ codec = dict(
 
 optim_wrapper = dict(
     optimizer=dict(
-        type='AdamW',
-        lr=5e-4,          # 初始学习率 (如果显存小 batch_size 小，可以适当调小到 1e-4)
-        betas=(0.9, 0.999),
-        weight_decay=0.1, # 权重衰减，防止过拟合
-    )
+        type='AdamW', lr=5e-4, betas=(0.9, 0.999), weight_decay=0.05),
+    paramwise_cfg=dict(
+        num_layers=24,
+        layer_decay_rate=0.8,
+        custom_keys={
+            'bias': dict(decay_mult=0.0),
+            'pos_embed': dict(decay_mult=0.0),
+            'relative_position_bias_table': dict(decay_mult=0.0),
+            'norm': dict(decay_mult=0.0),
+        },
+    ),
+    constructor='LayerDecayOptimWrapperConstructor',
+    clip_grad=dict(max_norm=1., norm_type=2),
 )
 
 param_scheduler = [
-    dict(
-        type='LinearLR',
-        start_factor=1e-5,
-        by_epoch=False,
-        begin=0,
-        end=500
-    ),
-    dict(
-        type='CosineAnnealingLR',
-        T_max=210,       # 对应 max_epochs
-        begin=0,
-        end=210,
-        by_epoch=True,
-        convert_to_iter_based=True
-    )
+    dict(type='LinearLR', begin=0, end=500, start_factor=0.001, by_epoch=False),
+    dict(type='CosineAnnealingLR', T_max=150, by_epoch=True)
 ]
 
 train_cfg = dict(
     by_epoch=True,
-    max_epochs=210,    # 训练多少轮 (建议 210 或 100)
-    val_interval=10    # 每多少轮验证一次 (10 轮一次比较合适)
+    max_epochs=150,    # 训练多少轮 (建议 210 或 100)
+    val_interval=5    # 每多少轮验证一次 (10 轮一次比较合适)
 )
 
 model = dict(
@@ -99,26 +94,22 @@ model = dict(
             checkpoint='https://download.openmmlab.com/mmpose/'
                        'v1/pretrained_models/mae_pretrain_vit_base_20230913.pth'),
     ),
-    neck=dict(
-        type='FeatureMapProcessor',
-        scale_factor=1.0,
-        apply_relu=True,
-    ),
     head=dict(
         type='AnatomyAwareHead',
         in_channels=768,
         out_channels=25, # 对应 Dataset 的 25 个点
+        deconv_out_channels=(256, 256),
+        deconv_kernel_sizes=(4, 4),
         loss=dict(
             type='KeypointMSELoss',
             use_target_weight=True
         ),
         decoder=codec,
-        type_loss_weight=0.5
+        type_loss_weight=0.03
     ),
     test_cfg=dict(
-        flip_test=True,
         flip_mode='heatmap',
-        shift_heatmap=True,
+        shift_heatmap=False,
     )
 )
 
@@ -126,22 +117,22 @@ model = dict(
 # 4. Data Pipeline
 # ==============================================================================
 train_pipeline = [
-    dict(type='LoadImage'),
+    dict(type='LoadImage', imdecode_backend='pillow'),
     dict(type='GetBBoxCenterScale'),
     dict(type='RandomFlip', direction='horizontal'),
     dict(type='RandomHalfBody'),
     dict(type='ClampScale'),
     dict(type='RandomBBoxTransform'),
     # use_udp 建议先关掉，除非你明确知道你在做什么
-    dict(type='TopdownAffine', input_size=codec['input_size'], use_udp=False),
+    dict(type='TopdownAffine', input_size=codec['input_size'], use_udp=True),
     dict(type='GenerateTarget', encoder=codec),
     dict(type='PackPoseInputs')
 ]
 
 val_pipeline = [
-    dict(type='LoadImage'),
+    dict(type='LoadImage', imdecode_backend='pillow'),
     dict(type='GetBBoxCenterScale'),
-    dict(type='TopdownAffine', input_size=codec['input_size'], use_udp=False),
+    dict(type='TopdownAffine', input_size=codec['input_size'], use_udp=True),
     dict(type='PackPoseInputs')
 ]
 
@@ -149,17 +140,16 @@ val_pipeline = [
 # 5. Dataloaders (核心修正处)
 # ==============================================================================
 train_dataloader = dict(
-    batch_size=32,
+    batch_size=64,
     num_workers=4,
     persistent_workers=True,
     sampler=dict(type='DefaultSampler', shuffle=True),
     dataset=dict(
-        type=DATASET_TYPE, # <--- 修正：使用 LDPoseDataset
+        type=DATASET_TYPE,
         data_root=DATA_ROOT,
         ann_file=TRAIN_ANN,
         data_prefix=dict(img='ldpose_train/'),
         pipeline=train_pipeline,
-        # 确保 metainfo 能被读到，LDPoseDataset 内部已经定义了 METAINFO，这里不需要额外写
     )
 )
 
@@ -167,6 +157,7 @@ val_dataloader = dict(
     batch_size=32,
     num_workers=4,
     persistent_workers=True,
+    drop_last=False,
     sampler=dict(type='DefaultSampler', shuffle=False),
     dataset=dict(
         type=DATASET_TYPE, # <--- 修正
@@ -182,6 +173,7 @@ test_dataloader = dict(
     batch_size=32,
     num_workers=4,
     persistent_workers=True,
+    drop_last=False,
     sampler=dict(type='DefaultSampler', shuffle=False),
     dataset=dict(
         type=DATASET_TYPE, # <--- 修正
@@ -206,4 +198,22 @@ test_evaluator = dict(
     type='ProstheticsMetric',
     ann_file=TEST_ANN,        # 使用变量
     score_thr=0.3,
+)
+
+default_hooks = dict(
+    timer=dict(type='IterTimerHook'),
+    logger=dict(type='LoggerHook', interval=50),
+    param_scheduler=dict(type='ParamSchedulerHook'),
+    checkpoint=dict(type='CheckpointHook', interval=10),  # 每10轮保存一次模型
+    sampler_seed=dict(type='DistSamplerSeedHook'),  # 这个保留，用来设定随机种子
+
+    # 你的可视化配置
+    visualization=dict(
+        type='PoseVisualizationHook',
+        enable=True,
+        interval=1,
+        show=False,
+        # 强制使用绝对路径，确保你能找到图片
+        out_dir='/home/sora/workspace/mmpose/debug_output_force'
+    ),
 )

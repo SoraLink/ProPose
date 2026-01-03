@@ -1,4 +1,6 @@
 import numpy as np
+import torch
+
 from mmpose.registry import DATASETS
 from mmpose.datasets import CocoDataset
 
@@ -98,9 +100,9 @@ class LDProsDataset(CocoDataset):
 
         # Sigma (用于 OKS 计算)，给自定义点一个默认值 0.05
         'sigmas': [
-            0.026, 0.025, 0.025, 0.035, 0.035, 0.079, 0.079, 0.072, 0.072, 0.062,
-            0.062, 0.107, 0.107, 0.087, 0.087, 0.089, 0.089,
-            0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05
+            0.026, 0.025, 0.025, 0.035, 0.035, 0.079, 0.079, 0.072, 0.072,
+            0.062, 0.062, 0.107, 0.107, 0.087, 0.087, 0.089, 0.089,
+            0.072, 0.072, 0.062, 0.062, 0.087, 0.087, 0.089, 0.089
         ],
     }
 
@@ -115,9 +117,21 @@ class LDProsDataset(CocoDataset):
 
         # 假设 JSON 里有一个 key 叫 "keypoint_types"
         if 'keypoint_types' in ann_info:
-            data_info['keypoint_types'] = np.array(ann_info['keypoint_types'], dtype=np.int64)
+            types = np.array(ann_info['keypoint_types'], dtype=np.int64)
+            data_info['keypoint_types'] = torch.from_numpy(types[None, :])
         else:
             # 默认填充 0 (假设 0 代表正常点，非0代表特殊点)
-            data_info['keypoint_types'] = np.zeros((25,), dtype=np.int64)
+            data_info['keypoint_types'] = torch.zeros((1, 25), dtype=torch.long)
+
+        data_info['instance_mapping_table'] = dict(
+            bbox='bboxes',
+            bbox_score='bbox_scores',
+            keypoints='keypoints',
+            keypoints_cam='keypoints_cam',
+            keypoints_visible='keypoints_visible',
+            bbox_scale='bbox_scales',
+            head_size='head_size',
+            keypoint_types='keypoint_types'
+        )
 
         return data_info

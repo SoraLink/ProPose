@@ -50,23 +50,29 @@ class ProstheticsMetric(CocoMetric):
         """
         # 调用父类处理标准坐标和分数
         super().process(data_batch, data_samples)
+        batch_len = len(data_samples)
+        start_idx = len(self.results) - batch_len
 
         # 额外存储 Type 预测和 GT，用于后续 evaluate 阶段的惩罚计算
-        for data_sample in data_samples:
+        for i, data_sample in enumerate(data_samples):
             # 存预测 Type
-            if 'keypoint_types' in data_sample.pred_instances:
-                pred_type = data_sample.pred_instances.keypoint_types.cpu().numpy()
+
+            target_result = self.results[start_idx + i]
+
+            if 'keypoint_types' in data_sample['pred_instances']:
+                pred_type = data_sample['pred_instances']['keypoint_types'].cpu().numpy()
             else:
+                num_kps = data_sample['pred_instances'].keypoints.shape[1]
                 # 如果没有 Type Head，默认全 0 (Normal)
-                pred_type = np.zeros((self.num_keypoints,), dtype=int)
+                pred_type = np.zeros((num_kps,), dtype=int)
 
             # 存 GT Type
-            gt_type = data_sample.gt_instance_labels.keypoint_types.cpu().numpy()
+            gt_type = data_sample['gt_instances']['keypoint_types'].cpu().numpy()
 
             # 将这些额外信息绑定到 results 列表的最后一个元素上
             # 注意: self.results 是父类维护的列表
-            self.results[-1]['pred_types'] = pred_type
-            self.results[-1]['gt_types'] = gt_type
+            target_result[0]['pred_types'] = pred_type
+            target_result[0]['gt_types'] = gt_type
 
     def compute_metrics(self, results):
         """
@@ -87,12 +93,12 @@ class ProstheticsMetric(CocoMetric):
         for i, res in enumerate(eval_results):
             # 获取该样本的预测和 GT
             # 注意：CocoMetric 的 results 格式通常包含 'keypoints' (Kx2) and 'keypoint_scores' (K)
-            pred_kps = res['keypoints']
-            pred_scores = res['keypoint_scores']
+            pred_kps = res[0]['keypoints'][0]
+            pred_scores = res[0]['keypoint_scores'][0]
 
             # 我们刚才存在里面的 Types
-            pred_types = res.get('pred_types', np.zeros(len(pred_scores)))
-            gt_types = res.get('gt_types', np.zeros(len(pred_scores)))
+            pred_types = res[0].get('pred_types', np.zeros(len(pred_scores)))[0]
+            gt_types = res[0].get('gt_types', np.zeros(len(pred_scores)))[0]
 
             # 获取 GT 的可见性 (v) 用于判断 Missing
             # 在 eval 阶段通常需要从 self.dataset 或原始标注获取 GT 的具体信息
@@ -132,7 +138,7 @@ class ProstheticsMetric(CocoMetric):
                         pred_scores[root_idx] = 0.0  # Root 连坐处死！
 
             # 更新分数回结果列表
-            res['keypoint_scores'] = pred_scores
+            res[0]['keypoint_scores'] = pred_scores[None]
 
         # 3. 计算 Ghost Rate
         ghost_rate = 0.0
@@ -144,7 +150,7 @@ class ProstheticsMetric(CocoMetric):
         ld_metrics = super().compute_metrics(eval_results)
         # 5. 把 Ghost Rate 加进输出字典
         for k, v in ld_metrics.items():
-            final_metrics[f'LDPose_{k}'] = v
+            final_metrics[f'LDPros_{k}'] = v
 
         final_metrics['Ghost_Rate'] = ghost_rate
 

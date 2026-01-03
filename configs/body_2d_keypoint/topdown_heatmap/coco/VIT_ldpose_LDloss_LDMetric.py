@@ -1,7 +1,9 @@
 _base_ = ['../../../_base_/default_runtime.py']
 
 # runtime
-train_cfg = dict(max_epochs=150, val_interval=5)
+
+randomness = dict(seed=42, deterministic=False)
+train_cfg = dict(max_epochs=150, val_interval=1)
 
 custom_imports = dict(
     imports=[
@@ -113,13 +115,13 @@ model = dict(
     ))
 
 # base dataset settings
-data_root = '/home/sora/Documents/uniform-pose/ldpose_final/'
+data_root = '/home/sora/workspace/dataset/ldpose_final/'
 dataset_type = 'CocoDataset'
 data_mode = 'topdown'
 
 # pipelines
 train_pipeline = [
-    dict(type='LoadImage'),
+    dict(type='LoadImage', imdecode_backend='pillow'),
     dict(type='GetBBoxCenterScale'),
     dict(type='RandomFlip', direction='horizontal'),
     dict(type='RandomHalfBody'),
@@ -130,7 +132,7 @@ train_pipeline = [
     dict(type='PackPoseInputs')
 ]
 val_pipeline = [
-    dict(type='LoadImage'),
+    dict(type='LoadImage', imdecode_backend='pillow'),
     dict(type='GetBBoxCenterScale'),
     dict(type='TopdownAffine', input_size=codec['input_size'], use_udp=True),
     dict(type='PackPoseInputs')
@@ -149,7 +151,7 @@ train_dataloader = dict(
         type=dataset_type,
         data_root=data_root,
         data_mode=data_mode,
-        ann_file='annotations/ldpose_train.json',
+        ann_file='pros_annotations/labels_train_final.json',
         data_prefix=dict(img='ldpose_train/'),
         pipeline=train_pipeline,
         metainfo=metainfo,
@@ -164,7 +166,7 @@ val_dataloader = dict(
         type=dataset_type,
         data_root=data_root,
         data_mode=data_mode,
-        ann_file='annotations/ldpose_val.json',
+        ann_file='pros_annotations/labels_val_final.json',
         data_prefix=dict(img='ldpose_val/'),
         test_mode=True,
         pipeline=val_pipeline,
@@ -180,7 +182,7 @@ test_dataloader = dict(
         type=dataset_type,
         data_root=data_root,
         data_mode=data_mode,
-        ann_file='annotations/ldpose_test.json',
+        ann_file='pros_annotations/labels_test_final.json',
         data_prefix=dict(img='ldpose_test/'),
         test_mode=True,
         pipeline=val_pipeline,
@@ -190,7 +192,7 @@ test_dataloader = dict(
 # evaluators
 val_evaluator = dict(
     type='CocoMetricLD',
-    ann_file=data_root + 'annotations/ldpose_val.json',
+    ann_file=data_root + 'pros_annotations/labels_val_final.json',
     conflict_map={
         # 左臂
         17: [7, 9, 19],  # Above-left-elbow residual ↔ {left elbow, left wrist, below-left-elbow residual}
@@ -212,7 +214,7 @@ val_evaluator = dict(
 )
 test_evaluator = dict(
     type='CocoMetricLD',
-    ann_file=data_root + 'annotations/ldpose_test.json',
+    ann_file=data_root + 'pros_annotations/labels_test_final.json',
     conflict_map={
         # 左臂
         17: [7, 9, 19],  # Above-left-elbow residual ↔ {left elbow, left wrist, below-left-elbow residual}

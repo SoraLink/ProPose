@@ -8,6 +8,27 @@ from mmengine.config import Config, DictAction
 from mmengine.hooks import Hook
 from mmengine.runner import Runner
 
+# ================= 临时修复 PyTorch 2.6 兼容性问题 =================
+import torch
+import numpy
+
+# 强制允许 numpy 的相关类被加载
+torch.serialization.add_safe_globals([
+    numpy._core.multiarray._reconstruct,
+    numpy.ndarray,
+    numpy.dtype,
+])
+
+# 或者更暴力的：直接让 torch.load 默认不检查安全性
+_original_torch_load = torch.load
+def patched_torch_load(*args, **kwargs):
+    # 如果没有显式指定 weights_only，就强制设为 False (回到旧版行为)
+    if 'weights_only' not in kwargs:
+        kwargs['weights_only'] = False
+    return _original_torch_load(*args, **kwargs)
+
+torch.load = patched_torch_load
+# ===============================================================
 
 def parse_args():
     parser = argparse.ArgumentParser(
