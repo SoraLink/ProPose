@@ -89,40 +89,61 @@ class ProstheticsMetric(CocoMetric):
         ghost_cnt = 0
         total_missing_cnt = 0
 
+        type_correct_all = 0
+        type_total_all = 0
+
+        type_correct_vis = 0
+        type_total_vis = 0
+
         # 2. 遍历所有样本进行"惩罚"
         for i, res in enumerate(eval_results):
             # 获取该样本的预测和 GT
             # 注意：CocoMetric 的 results 格式通常包含 'keypoints' (Kx2) and 'keypoint_scores' (K)
-            pred_kps = res[0]['keypoints'][0]
             pred_scores = res[0]['keypoint_scores'][0]
 
             # 我们刚才存在里面的 Types
             pred_types = res[0].get('pred_types', np.zeros(len(pred_scores)))[0]
             gt_types = res[0].get('gt_types', np.zeros(len(pred_scores)))[0]
 
+            match_mask = (pred_types == gt_types)
+            type_correct_all += np.sum(match_mask)
+            type_total_all += len(gt_types)
             # 获取 GT 的可见性 (v) 用于判断 Missing
             # 在 eval 阶段通常需要从 self.dataset 或原始标注获取 GT 的具体信息
             # 这里简化处理：我们假设 gt_types=2 就是 Missing
 
+            vis_mask = (gt_types != 2)
+            vis_count = np.sum(vis_mask)
+
+            if vis_count > 0:
+                type_total_vis += vis_count
+                # 在可见点的掩码下，看预测是否正确
+                vis_correct = match_mask[vis_mask]
+                type_correct_vis += np.sum(vis_correct)
+
+            for k in range(len(pred_scores)):
+                # 如果 GT 标记为 Missing (2)
+                if gt_types[k] == 2:
+                    total_missing_cnt += 1  # 分母：总缺失点数
+
+                    # 判定幻觉条件：置信度高 且 预测类型认为存在
+                    is_high_conf = pred_scores[k] > self.score_thr
+                    is_pred_exist = pred_types[k] != 2
+
+                    if is_high_conf and is_pred_exist:
+                        ghost_cnt += 1
+
             # === A. 材质感知惩罚 (Type-Aware Penalty) ===
             # 策略：如果 GT 存在 (v>0) 且类型不对，直接把 Score 清零
             for k in range(len(pred_scores)):
-                # 只有当 GT 认为该点存在(非 Missing)时才检查材质
-                if gt_types[k] != 2:
-                    # 如果分类错误 (如把假肢 1 认成肉体 0)
-                    if pred_types[k] != gt_types[k]:
-                        pred_scores[k] = 0.0  # 杀！
+                if gt_types[k] != 2 and pred_types[k] != gt_types[k]:
+                    pred_scores[k] = 0.0
 
             # === B. 连坐惩罚 (Chain Penalty) ===
             # 策略：如果 Root 是残肢，但预测出了 Child，罚 Root
             for root_idx, child_indices in self.chain_dependency.items():
                 root_idx = int(root_idx)
-
-                # 前提：GT 说这是一个残肢 (Root 存在，且是 Type 0/1)
-                # 且 GT 说 Root 不是 Missing (v>0)
                 if gt_types[root_idx] != 2:
-
-                    # 检查下游是否有"幻觉"
                     has_hallucination = False
                     for child_idx in child_indices:
                         if gt_types[child_idx] == 2:
@@ -130,8 +151,6 @@ class ProstheticsMetric(CocoMetric):
                             is_pred_exist = pred_types[child_idx] != 2
                             if is_high_conf and is_pred_exist:
                                 has_hallucination = True
-                                ghost_cnt += 1
-                            total_missing_cnt += 1
 
                     # 如果发现下游有幻觉，连坐惩罚 Root
                     if has_hallucination:
@@ -145,6 +164,9 @@ class ProstheticsMetric(CocoMetric):
         if total_missing_cnt > 0:
             ghost_rate = ghost_cnt / total_missing_cnt
 
+        acc_all = type_correct_all / type_total_all if type_total_all > 0 else 0.0
+        acc_vis = type_correct_vis / type_total_vis if type_total_vis > 0 else 0.0
+
         # 4. 调用父类方法计算标准 AP (此时分数已经被我们惩罚过了)
         # 这里的 results 已经被修改了 scores
         ld_metrics = super().compute_metrics(eval_results)
@@ -153,5 +175,7 @@ class ProstheticsMetric(CocoMetric):
             final_metrics[f'LDPros_{k}'] = v
 
         final_metrics['Ghost_Rate'] = ghost_rate
+        final_metrics['Type_Acc_All'] = acc_all
+        final_metrics['Type_Acc_Vis'] = acc_vis
 
         return final_metrics

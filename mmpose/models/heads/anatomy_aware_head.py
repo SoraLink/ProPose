@@ -84,6 +84,12 @@ class AnatomyAwareHead(HeatmapHead):
         loss_type = self.ce_loss(pred_type_logits.view(-1, 3), gt_types.view(-1))
         losses['loss_type'] = self.type_loss_weight * loss_type
 
+        with torch.no_grad():
+            pred_classes = torch.argmax(pred_type_logits, dim=-1)
+            correct = (pred_classes == gt_types.squeeze(1))
+            acc_type = correct.float().mean()
+            losses['acc_type'] = acc_type
+
         # 5. 计算 Anatomy Contrastive Loss
         if self.contrast_loss_module is not None:
             loss_contrast = self.contrast_loss_module(pred_heatmaps, pred_type_logits, gt_types)

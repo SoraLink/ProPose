@@ -105,7 +105,7 @@ model = dict(
             use_target_weight=True
         ),
         decoder=codec,
-        type_loss_weight=0.03
+        type_loss_weight=0.001
     ),
     test_cfg=dict(
         flip_mode='heatmap',
@@ -200,20 +200,20 @@ test_evaluator = dict(
     score_thr=0.3,
 )
 
-default_hooks = dict(
-    timer=dict(type='IterTimerHook'),
-    logger=dict(type='LoggerHook', interval=50),
-    param_scheduler=dict(type='ParamSchedulerHook'),
-    checkpoint=dict(type='CheckpointHook', interval=10),  # 每10轮保存一次模型
-    sampler_seed=dict(type='DistSamplerSeedHook'),  # 这个保留，用来设定随机种子
-
-    # 你的可视化配置
-    visualization=dict(
-        type='PoseVisualizationHook',
-        enable=True,
-        interval=1,
-        show=False,
-        # 强制使用绝对路径，确保你能找到图片
-        out_dir='/home/sora/workspace/mmpose/debug_output_force'
-    ),
-)
+# default_hooks = dict(
+#     timer=dict(type='IterTimerHook'),
+#     logger=dict(type='LoggerHook', interval=50),
+#     param_scheduler=dict(type='ParamSchedulerHook'),
+#     checkpoint=dict(type='CheckpointHook', interval=10),  # 每10轮保存一次模型
+#     sampler_seed=dict(type='DistSamplerSeedHook'),  # 这个保留，用来设定随机种子
+#
+#     # 你的可视化配置
+#     visualization=dict(
+#         type='PoseVisualizationHook',
+#         enable=True,
+#         interval=1,
+#         show=False,
+#         # 强制使用绝对路径，确保你能找到图片
+#         out_dir='/home/sora/workspace/mmpose/debug_output_force'
+#     ),
+# )
