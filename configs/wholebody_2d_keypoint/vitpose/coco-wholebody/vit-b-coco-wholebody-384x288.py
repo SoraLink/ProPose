@@ -1,41 +1,48 @@
-_base_ = ['../../configs/_base_/default_runtime.py']
-
+_base_ = [
+    '../../../_base_/default_runtime.py',
+    '../../../_base_/datasets/coco_wholebody.py'
+]
 # ================= 1. 运行时设置 =================
 # ViT 收敛比较慢，且我们要从 MAE 只有 backbone 的权重开始练
 # 建议跑 100-210 epoch。为了 Benchmark 统一，这里设为 100 (和你的 RTMW 一致)
-max_epochs = 100
-base_lr = 5e-4 # ViT 学习率通常比 CNN 低
 
-train_cfg = dict(max_epochs=max_epochs, val_interval=10)
-randomness = dict(seed=21)
+# runtime
+train_cfg = dict(max_epochs=210, val_interval=10)
 
-# ================= 2. 优化器 (ViT 标配 AdamW) =================
+# optimizer
+custom_imports = dict(
+    imports=['mmpose.engine.optim_wrappers.layer_decay_optim_wrapper'],
+    allow_failed_imports=False)
+
 optim_wrapper = dict(
-    type='OptimWrapper',
     optimizer=dict(
-        type='AdamW',
-        lr=base_lr,
-        betas=(0.9, 0.999),
-        weight_decay=0.1), # ViT 需要较大的 weight decay 防止过拟合
-    #以此实现 Layer-wise learning rate decay (ViT 常用技巧)
+        type='AdamW', lr=5e-4, betas=(0.9, 0.999), weight_decay=0.1),
     paramwise_cfg=dict(
+        num_layers=12,
+        layer_decay_rate=0.75,
         custom_keys={
-            'backbone': dict(lr_mult=0.1), # 骨干网络学习率是 Head 的 1/10
-            'norm': dict(decay_mult=0.)
-        }))
+            'bias': dict(decay_mult=0.0),
+            'pos_embed': dict(decay_mult=0.0),
+            'relative_position_bias_table': dict(decay_mult=0.0),
+            'norm': dict(decay_mult=0.0),
+        },
+    ),
+    constructor='LayerDecayOptimWrapperConstructor',
+    clip_grad=dict(max_norm=1., norm_type=2),
+)
 
-# 学习率调度
+# learning policy
 param_scheduler = [
     dict(
-        type='LinearLR', start_factor=1e-4, by_epoch=False, begin=0, end=1000),
+        type='LinearLR', begin=0, end=500, start_factor=0.001,
+        by_epoch=False),  # warm-up
     dict(
-        type='CosineAnnealingLR',
-        eta_min=base_lr * 0.01,
+        type='MultiStepLR',
         begin=0,
-        end=max_epochs,
-        T_max=max_epochs,
-        by_epoch=True,
-        convert_to_iter_based=True),
+        end=210,
+        milestones=[170, 200],
+        gamma=0.1,
+        by_epoch=True)
 ]
 
 # 自动缩放 LR (根据 batch size)
@@ -64,6 +71,9 @@ model = dict(
         patch_size=16,
         qkv_bias=True,
         drop_path_rate=0.3, # 防止过拟合
+        with_cls_token=False,
+        out_type='featmap',
+        patch_cfg=dict(padding=2),
         # 【关键】加载你的 MAE 预训练权重
         init_cfg=dict(
             type='Pretrained',
@@ -73,6 +83,8 @@ model = dict(
         type='HeatmapHead',
         in_channels=768, # ViT-Base 的输出通道
         out_channels=133, # WholeBody 133点
+        deconv_out_channels=(256, 256),
+        deconv_kernel_sizes=(4, 4),
         loss=dict(type='KeypointMSELoss', use_target_weight=True),
         decoder=codec),
     test_cfg=dict(
@@ -114,8 +126,8 @@ val_pipeline = [
 
 # Dataloader
 train_dataloader = dict(
-    batch_size=32, # 【警告】ViT 显存占用大，如果 4090 爆显存，请改为 16 或 8
-    num_workers=8,
+    batch_size=64, # 【警告】ViT 显存占用大，如果 4090 爆显存，请改为 16 或 8
+    num_workers=4,
     persistent_workers=True,
     sampler=dict(type='DefaultSampler', shuffle=True),
     dataset=dict(
@@ -129,7 +141,7 @@ train_dataloader = dict(
 
 val_dataloader = dict(
     batch_size=32,
-    num_workers=8,
+    num_workers=4,
     persistent_workers=True,
     drop_last=False,
     sampler=dict(type='DefaultSampler', shuffle=False, round_up=False),
