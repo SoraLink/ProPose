@@ -7,7 +7,7 @@ _base_ = [
 # 建议跑 100-210 epoch。为了 Benchmark 统一，这里设为 100 (和你的 RTMW 一致)
 
 # runtime
-train_cfg = dict(max_epochs=210, val_interval=10)
+train_cfg = dict(max_epochs=210, val_interval=50)
 
 # optimizer
 custom_imports = dict(
@@ -127,7 +127,7 @@ val_pipeline = [
 # Dataloader
 train_dataloader = dict(
     batch_size=64, # 【警告】ViT 显存占用大，如果 4090 爆显存，请改为 16 或 8
-    num_workers=4,
+    num_workers=8,
     persistent_workers=True,
     sampler=dict(type='DefaultSampler', shuffle=True),
     dataset=dict(
