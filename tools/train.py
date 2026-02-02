@@ -3,9 +3,19 @@ import argparse
 import os
 import os.path as osp
 
+import torch
 from mmengine.config import Config, DictAction
 from mmengine.runner import Runner
 
+_original_torch_load = torch.load
+
+def _patched_torch_load(*args, **kwargs):
+    # 如果调用方没有指定 weights_only，则强制设为 False
+    if 'weights_only' not in kwargs:
+        kwargs['weights_only'] = False
+    return _original_torch_load(*args, **kwargs)
+
+torch.load = _patched_torch_load
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Train a pose model')
