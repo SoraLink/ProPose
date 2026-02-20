@@ -2,24 +2,17 @@ import os.path
 
 _base_ = [
     '../../../_base_/default_runtime.py',
-    # 删掉了 coco.py，因为你自己完整定义了 dataloader，不需要继承它的配置，避免冲突
 ]
 
-# ==============================================================================
-# 0. 全局变量 (统一管理路径，方便修改)
-# ==============================================================================
 DATASET_TYPE = 'LDProsDataset'
-DATA_ROOT = '/home/sora/workspace/dataset/ldpose_final'
+DATA_ROOT = '/home/sora/workspace/dataset/pros_final'
 DATA_MODE = 'topdown'
 
-# 确保这里的路径是对的
-TRAIN_ANN = os.path.join(DATA_ROOT, 'pros_annotations/labels_train_final.json')
-VAL_ANN =   os.path.join(DATA_ROOT, 'pros_annotations/labels_val_final.json')
-TEST_ANN =  os.path.join(DATA_ROOT, 'pros_annotations/labels_test_final.json')
+TRAIN_ANN = os.path.join(DATA_ROOT, 'train_final/train_final.json')
+VAL_ANN =   os.path.join(DATA_ROOT, 'test_final/test_final.json')
+TEST_ANN =  os.path.join(DATA_ROOT, 'test_final/test_final.json')
 randomness = dict(seed=42, deterministic=False)
-# ==============================================================================
-# 1. Custom Imports (必须导入 Dataset!)
-# ==============================================================================
+
 custom_imports = dict(
     imports=[
         'mmpose.evaluation.metrics.prosthetics_metrics_baseline',
@@ -62,13 +55,13 @@ optim_wrapper = dict(
 
 param_scheduler = [
     dict(type='LinearLR', begin=0, end=500, start_factor=0.001, by_epoch=False),
-    dict(type='CosineAnnealingLR', T_max=150, by_epoch=True)
+    dict(type='CosineAnnealingLR', T_max=50, by_epoch=True)
 ]
 
 train_cfg = dict(
     by_epoch=True,
-    max_epochs=150,    # 训练多少轮 (建议 210 或 100)
-    val_interval=5    # 每多少轮验证一次 (10 轮一次比较合适)
+    max_epochs=50,
+    val_interval=5
 )
 
 model = dict(
@@ -97,7 +90,7 @@ model = dict(
     head=dict(
         type='AnatomyAwareHead',
         in_channels=768,
-        out_channels=25, # 对应 Dataset 的 25 个点
+        out_channels=31,
         deconv_out_channels=(256, 256),
         deconv_kernel_sizes=(4, 4),
         loss=dict(
@@ -105,7 +98,7 @@ model = dict(
             use_target_weight=True
         ),
         decoder=codec,
-        type_loss_weight=0.001
+        type_loss_weight=0.004
     ),
     test_cfg=dict(
         flip_mode='heatmap',
@@ -148,7 +141,7 @@ train_dataloader = dict(
         type=DATASET_TYPE,
         data_root=DATA_ROOT,
         ann_file=TRAIN_ANN,
-        data_prefix=dict(img='ldpose_train/'),
+        data_prefix=dict(img='train_final/images/'),
         pipeline=train_pipeline,
     )
 )
@@ -163,7 +156,7 @@ val_dataloader = dict(
         type=DATASET_TYPE, # <--- 修正
         data_root=DATA_ROOT,
         ann_file=VAL_ANN,
-        data_prefix=dict(img='ldpose_val/'),
+        data_prefix=dict(img='test_final/images/'),
         pipeline=val_pipeline,
         test_mode=True,
     )
@@ -179,7 +172,7 @@ test_dataloader = dict(
         type=DATASET_TYPE, # <--- 修正
         data_root=DATA_ROOT,
         ann_file=TEST_ANN,
-        data_prefix=dict(img='ldpose_test/'),
+        data_prefix=dict(img='test_final/images/'),
         pipeline=val_pipeline,
         test_mode=True,
     )
@@ -200,20 +193,10 @@ test_evaluator = dict(
     score_thr=0.3,
 )
 
-# default_hooks = dict(
-#     timer=dict(type='IterTimerHook'),
-#     logger=dict(type='LoggerHook', interval=50),
-#     param_scheduler=dict(type='ParamSchedulerHook'),
-#     checkpoint=dict(type='CheckpointHook', interval=10),  # 每10轮保存一次模型
-#     sampler_seed=dict(type='DistSamplerSeedHook'),  # 这个保留，用来设定随机种子
-#
-#     # 你的可视化配置
-#     visualization=dict(
-#         type='PoseVisualizationHook',
-#         enable=True,
-#         interval=1,
-#         show=False,
-#         # 强制使用绝对路径，确保你能找到图片
-#         out_dir='/home/sora/workspace/mmpose/debug_output_force'
-#     ),
-# )
+default_hooks = dict(
+    timer=dict(type='IterTimerHook'),
+    logger=dict(type='LoggerHook', interval=50), # 打印日志
+    param_scheduler=dict(type='ParamSchedulerHook'),
+    checkpoint=dict(type='CheckpointHook', interval=5, max_keep_ckpts=-1),
+    sampler_seed=dict(type='DistSamplerSeedHook'),
+)

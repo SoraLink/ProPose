@@ -560,12 +560,12 @@ class CocoMetric(BaseMetric):
         res_file = f'{outfile_prefix}.keypoints.json'
         coco_det = self.coco.loadRes(res_file)
         sigmas = self.dataset_meta['sigmas']
-        coco_eval = COCOeval(self.coco, coco_det, self.iou_type, sigmas,
+        self.coco_eval = COCOeval(self.coco, coco_det, self.iou_type, sigmas,
                              self.use_area)
-        coco_eval.params.useSegm = None
-        coco_eval.evaluate()
-        coco_eval.accumulate()
-        coco_eval.summarize()
+        self.coco_eval.params.useSegm = None
+        self.coco_eval.evaluate()
+        self.coco_eval.accumulate()
+        self.coco_eval.summarize()
 
         if self.iou_type == 'keypoints_crowd':
             stats_names = [
@@ -578,7 +578,7 @@ class CocoMetric(BaseMetric):
                 'AR .75', 'AR (M)', 'AR (L)'
             ]
 
-        info_str = list(zip(stats_names, coco_eval.stats))
+        info_str = list(zip(stats_names, self.coco_eval.stats))
 
         return info_str
 

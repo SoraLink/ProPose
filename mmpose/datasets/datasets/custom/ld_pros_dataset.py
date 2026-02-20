@@ -16,7 +16,7 @@ class LDProsDataset(CocoDataset):
     METAINFO = {
         'dataset_name': 'ld_pros_pose',
         'classes': ('person',),
-
+        'num_keypoints': 31,
         # === 1. 关键点定义 (完全对应截图) ===
         'keypoint_info': {
             # --- Part A: COCO 原生 17 点 (ID 0-16) ---
@@ -39,69 +39,73 @@ class LDProsDataset(CocoDataset):
             16: dict(name='right_ankle', id=16, color=[255, 128, 0], type='lower', swap='left_ankle'),
 
             # --- Part B: 自定义残肢/假肢点 (ID 17-24) ---
-            # 颜色设定：使用了红色系 [255, 0, 0] 以便在可视化时突出显示
+            17: dict(name='L_Middle_Tip', id=17, color=[255, 0, 255], type='upper', swap='R_Middle_Tip'),
+            18: dict(name='R_Middle_Tip', id=18, color=[255, 0, 255], type='upper', swap='L_Middle_Tip'),
+            19: dict(name='L_Heel', id=19, color=[255, 0, 255], type='lower', swap='R_Heel'),
+            20: dict(name='R_Heel', id=20, color=[255, 0, 255], type='lower', swap='L_Heel'),
+            21: dict(name='L_Toe_Tip', id=21, color=[255, 0, 255], type='lower', swap='R_Toe_Tip'),
+            22: dict(name='R_Toe_Tip', id=22, color=[255, 0, 255], type='lower', swap='L_Toe_Tip'),
 
-            # 肘上 (连接到 Shoulder)
-            17: dict(name='L-Elbow-Res-Above', id=17, color=[255, 0, 0], type='upper', swap='R-Elbow-Res-Above'),
-            18: dict(name='R-Elbow-Res-Above', id=18, color=[255, 0, 0], type='upper', swap='L-Elbow-Res-Above'),
-
-            # 肘下 (连接到 Elbow)
-            19: dict(name='L-Elbow-Res-Below', id=19, color=[255, 0, 0], type='upper', swap='R-Elbow-Res-Below'),
-            20: dict(name='R-Elbow-Res-Below', id=20, color=[255, 0, 0], type='upper', swap='L-Elbow-Res-Below'),
-
-            # 膝上 (连接到 Hip)
-            21: dict(name='L-Knee-Res-Above', id=21, color=[255, 0, 0], type='lower', swap='R-Knee-Res-Above'),
-            22: dict(name='R-Knee-Res-Above', id=22, color=[255, 0, 0], type='lower', swap='L-Knee-Res-Above'),
-
-            # 膝下 (连接到 Knee)
-            23: dict(name='L-Knee-Res-Below', id=23, color=[255, 0, 0], type='lower', swap='R-Knee-Res-Below'),
-            24: dict(name='R-Knee-Res-Below', id=24, color=[255, 0, 0], type='lower', swap='L-Knee-Res-Below'),
+            # 23-30: 残肢点 (Res KPs)
+            23: dict(name='L-Elbow-Res-Above', id=23, color=[255, 0, 0], type='upper', swap='R-Elbow-Res-Above'),
+            24: dict(name='R-Elbow-Res-Above', id=24, color=[255, 0, 0], type='upper', swap='L-Elbow-Res-Above'),
+            25: dict(name='L-Elbow-Res-Below', id=25, color=[255, 0, 0], type='upper', swap='R-Elbow-Res-Below'),
+            26: dict(name='R-Elbow-Res-Below', id=26, color=[255, 0, 0], type='upper', swap='L-Elbow-Res-Below'),
+            27: dict(name='L-Knee-Res-Above', id=27, color=[255, 0, 0], type='lower', swap='R-Knee-Res-Above'),
+            28: dict(name='R-Knee-Res-Above', id=28, color=[255, 0, 0], type='lower', swap='L-Knee-Res-Above'),
+            29: dict(name='L-Knee-Res-Below', id=29, color=[255, 0, 0], type='lower', swap='R-Knee-Res-Below'),
+            30: dict(name='R-Knee-Res-Below', id=30, color=[255, 0, 0], type='lower', swap='L-Knee-Res-Below'),
         },
 
         # === 2. 骨架连接 (根据 ID 和解剖逻辑推导) ===
         'skeleton_info': {
-            # -- COCO 标准连线 --
-            0: dict(link=('left_ankle', 'left_knee'), id=0, color=[0, 255, 0]),
-            1: dict(link=('left_knee', 'left_hip'), id=1, color=[0, 255, 0]),
-            2: dict(link=('right_ankle', 'right_knee'), id=2, color=[255, 128, 0]),
-            3: dict(link=('right_knee', 'right_hip'), id=3, color=[255, 128, 0]),
-            4: dict(link=('left_hip', 'right_hip'), id=4, color=[51, 153, 255]),
-            5: dict(link=('left_shoulder', 'left_hip'), id=5, color=[51, 153, 255]),
-            6: dict(link=('right_shoulder', 'right_hip'), id=6, color=[51, 153, 255]),
-            7: dict(link=('left_shoulder', 'right_shoulder'), id=7, color=[51, 153, 255]),
-            8: dict(link=('left_shoulder', 'left_elbow'), id=8, color=[0, 255, 0]),
-            9: dict(link=('right_shoulder', 'right_elbow'), id=9, color=[255, 128, 0]),
-            10: dict(link=('left_elbow', 'left_wrist'), id=10, color=[0, 255, 0]),
-            11: dict(link=('right_elbow', 'right_wrist'), id=11, color=[255, 128, 0]),
-            12: dict(link=('left_eye', 'right_eye'), id=12, color=[51, 153, 255]),
-            13: dict(link=('nose', 'left_eye'), id=13, color=[51, 153, 255]),
-            14: dict(link=('nose', 'right_eye'), id=14, color=[51, 153, 255]),
-            15: dict(link=('left_eye', 'left_ear'), id=15, color=[51, 153, 255]),
-            16: dict(link=('right_eye', 'right_ear'), id=16, color=[51, 153, 255]),
+            # --- Part A: 基础连线 (0-16 为原生或基础结构) ---
+            0: dict(link=('nose', 'left_eye'), id=0, color=[51, 153, 255]),
+            1: dict(link=('nose', 'right_eye'), id=1, color=[51, 153, 255]),
+            2: dict(link=('left_eye', 'left_ear'), id=2, color=[51, 153, 255]),
+            3: dict(link=('right_eye', 'right_ear'), id=3, color=[51, 153, 255]),
+            4: dict(link=('left_shoulder', 'right_shoulder'), id=4, color=[51, 153, 255]),
+            5: dict(link=('left_shoulder', 'left_elbow'), id=5, color=[0, 255, 0]),
+            6: dict(link=('left_elbow', 'left_wrist'), id=6, color=[0, 255, 0]),
+            7: dict(link=('right_shoulder', 'right_elbow'), id=7, color=[255, 128, 0]),
+            8: dict(link=('right_elbow', 'right_wrist'), id=8, color=[255, 128, 0]),
+            9: dict(link=('left_shoulder', 'left_hip'), id=9, color=[51, 153, 255]),
+            10: dict(link=('right_shoulder', 'right_hip'), id=10, color=[51, 153, 255]),
+            11: dict(link=('left_hip', 'right_hip'), id=11, color=[51, 153, 255]),
+            12: dict(link=('left_hip', 'left_knee'), id=12, color=[0, 255, 0]),
+            13: dict(link=('left_knee', 'left_ankle'), id=13, color=[0, 255, 0]),
+            14: dict(link=('right_hip', 'right_knee'), id=14, color=[255, 128, 0]),
+            15: dict(link=('right_knee', 'right_ankle'), id=15, color=[255, 128, 0]),
 
-            # -- 自定义连线 (推测逻辑) --
-            # "Res-Above" 通常是从肩膀/髋部延伸出来的
-            17: dict(link=('left_shoulder', 'L-Elbow-Res-Above'), id=17, color=[255, 0, 0]),
-            18: dict(link=('right_shoulder', 'R-Elbow-Res-Above'), id=18, color=[255, 0, 0]),
-            19: dict(link=('left_hip', 'L-Knee-Res-Above'), id=19, color=[255, 0, 0]),
-            20: dict(link=('right_hip', 'R-Knee-Res-Above'), id=20, color=[255, 0, 0]),
+            # --- Part B: 新增点连线 (17-22: 肢体末端) ---
+            16: dict(link=('left_wrist', 'L_Middle_Tip'), id=16, color=[0, 255, 255]),
+            17: dict(link=('right_wrist', 'R_Middle_Tip'), id=17, color=[255, 0, 255]),
+            18: dict(link=('left_ankle', 'L_Heel'), id=18, color=[0, 255, 255]),
+            19: dict(link=('left_ankle', 'L_Toe_Tip'), id=19, color=[0, 255, 255]),
+            20: dict(link=('right_ankle', 'R_Heel'), id=20, color=[255, 0, 255]),
+            21: dict(link=('right_ankle', 'R_Toe_Tip'), id=21, color=[255, 0, 255]),
 
-            # "Res-Below" 通常是从肘部/膝盖延伸出来的
-            21: dict(link=('left_elbow', 'L-Elbow-Res-Below'), id=21, color=[255, 0, 0]),
-            22: dict(link=('right_elbow', 'R-Elbow-Res-Below'), id=22, color=[255, 0, 0]),
-            23: dict(link=('left_knee', 'L-Knee-Res-Below'), id=23, color=[255, 0, 0]),
-            24: dict(link=('right_knee', 'R-Knee-Res-Below'), id=24, color=[255, 0, 0]),
+            # --- Part C: 残肢连线 (23-30: 对应 RES_KPS) ---
+            22: dict(link=('left_shoulder', 'L-Elbow-Res-Above'), id=22, color=[255, 0, 0]),
+            23: dict(link=('right_shoulder', 'R-Elbow-Res-Above'), id=23, color=[255, 0, 0]),
+            24: dict(link=('left_elbow', 'L-Elbow-Res-Below'), id=24, color=[255, 0, 0]),
+            25: dict(link=('right_elbow', 'R-Elbow-Res-Below'), id=25, color=[255, 0, 0]),
+            26: dict(link=('left_hip', 'L-Knee-Res-Above'), id=26, color=[255, 0, 0]),
+            27: dict(link=('right_hip', 'R-Knee-Res-Above'), id=27, color=[255, 0, 0]),
+            28: dict(link=('left_knee', 'L-Knee-Res-Below'), id=28, color=[255, 0, 0]),
+            29: dict(link=('right_knee', 'R-Knee-Res-Below'), id=29, color=[255, 0, 0]),
         },
 
         # === 3. 翻转时对应的 ID 列表 ===
         # 这个列表非常关键，MMPose 训练时 Flip 增强就是靠这个 list 知道谁和谁互换
         # 格式：[1.0] * 25
-        'joint_weights': [1.] * 25,
+        'joint_weights': [1.] * 31,
 
         # Sigma (用于 OKS 计算)，给自定义点一个默认值 0.05
         'sigmas': [
             0.026, 0.025, 0.025, 0.035, 0.035, 0.079, 0.079, 0.072, 0.072,
             0.062, 0.062, 0.107, 0.107, 0.087, 0.087, 0.089, 0.089,
+            0.089, 0.089, 0.089, 0.089, 0.089, 0.089,
             0.072, 0.072, 0.062, 0.062, 0.087, 0.087, 0.089, 0.089
         ],
     }
@@ -121,7 +125,23 @@ class LDProsDataset(CocoDataset):
             data_info['keypoint_types'] = torch.from_numpy(types[None, :])
         else:
             # 默认填充 0 (假设 0 代表正常点，非0代表特殊点)
-            data_info['keypoint_types'] = torch.zeros((1, 25), dtype=torch.long)
+            raise ValueError('keypoint_types not found in raw_ann_info')
+
+        ############# will be deleted
+        absent_indices = np.where(types == 2)[0]
+        if len(absent_indices) > 0:
+            # A. 修改 visibility: 强制设为 0 (Not labeled)
+            # 这样 Metrics (AP) 计算时会忽略这些点
+            kps_vis = data_info['keypoints_visible']  # numpy array
+            kps_vis[0, absent_indices] = 0
+            data_info['keypoints_visible'] = kps_vis
+
+            # B. 修改 coordinates: (可选) 强制设为 0，防止脏数据干扰
+            kps = data_info['keypoints']
+            kps[0, absent_indices] = [0.0, 0.0]
+            data_info['keypoints'] = kps
+
+        ############# will be deleted
 
         data_info['instance_mapping_table'] = dict(
             bbox='bboxes',
