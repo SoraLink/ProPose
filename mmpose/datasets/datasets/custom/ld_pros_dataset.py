@@ -127,22 +127,6 @@ class LDProsDataset(CocoDataset):
             # 默认填充 0 (假设 0 代表正常点，非0代表特殊点)
             raise ValueError('keypoint_types not found in raw_ann_info')
 
-        ############# will be deleted
-        absent_indices = np.where(types == 2)[0]
-        if len(absent_indices) > 0:
-            # A. 修改 visibility: 强制设为 0 (Not labeled)
-            # 这样 Metrics (AP) 计算时会忽略这些点
-            kps_vis = data_info['keypoints_visible']  # numpy array
-            kps_vis[0, absent_indices] = 0
-            data_info['keypoints_visible'] = kps_vis
-
-            # B. 修改 coordinates: (可选) 强制设为 0，防止脏数据干扰
-            kps = data_info['keypoints']
-            kps[0, absent_indices] = [0.0, 0.0]
-            data_info['keypoints'] = kps
-
-        ############# will be deleted
-
         data_info['instance_mapping_table'] = dict(
             bbox='bboxes',
             bbox_score='bbox_scores',

@@ -46,32 +46,34 @@ class AnatomyAwareHead(HeatmapHead):
         losses = dict()
 
         gt_heatmaps = torch.stack([d.gt_fields.heatmaps for d in batch_data_samples]).to(pred_heatmaps.device)
-        target_weight = torch.cat([d.gt_instance_labels.keypoint_weights for d in batch_data_samples]).to(
-            pred_heatmaps.device)
+        target_visible = torch.cat([
+            torch.as_tensor(d.gt_instances.keypoints_visible, dtype=torch.float32)
+            for d in batch_data_samples
+        ]).to(pred_heatmaps.device)
         gt_types = torch.stack([d.gt_instances['keypoint_types'] for d in batch_data_samples]).to(
             pred_heatmaps.device).long()
 
         B, K = pred_heatmaps.shape[0], pred_heatmaps.shape[1]
-        weights_flat = target_weight.view(B, K)
+        visible_flat = target_visible.view(B, K)
         types_flat = gt_types.view(B, K)
         logits_flat = pred_type_logits.view(B * K, 3)
 
         # CrossEntropy Loss (Type)
-        ce_mask = (weights_flat > 0).view(-1).float()  # [B*K]
+        ce_mask = (visible_flat > 0).view(-1).float()  # [B*K]
         raw_loss_type = self.ce_loss(logits_flat, types_flat.view(-1))
         loss_type = (raw_loss_type * ce_mask).sum() / (ce_mask.sum() + 1e-6)
         losses['loss_type'] = self.type_loss_weight * loss_type
 
         # MSE Loss (Heatmap)
-        reg_mask = (weights_flat > 0) & (types_flat != 2)
-        new_target_weight = reg_mask.float().view(target_weight.shape)
+        reg_mask = (visible_flat > 0) & (types_flat != 2)
+        new_target_weight = reg_mask.float().view(visible_flat.shape)
         loss_kpt = self.loss_module(pred_heatmaps, gt_heatmaps, new_target_weight)
         losses['loss_kpt'] = loss_kpt
 
         with torch.no_grad():
             pred_classes = torch.argmax(pred_type_logits, dim=-1)
             correct = (pred_classes == gt_types.squeeze(1))
-            acc_type = (correct.float() * (weights_flat > 0).float()).sum() / ((weights_flat > 0).float().sum() + 1e-6)
+            acc_type = (correct.float() * (visible_flat > 0).float()).sum() / ((visible_flat > 0).float().sum() + 1e-6)
             losses['acc_type'] = acc_type
 
         if train_cfg.get('compute_acc', True):

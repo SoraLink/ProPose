@@ -261,6 +261,27 @@ class RandomFlip(BaseTransform):
 
 
 @TRANSFORMS.register_module()
+class CustomRandomFlip(RandomFlip):
+    """
+    专为残肢数据集定制的随机翻转。
+    严谨版：仅在发生水平翻转时，才同步翻转 keypoint_types。
+    """
+
+    def transform(self, results: dict) -> dict:
+        results = super().transform(results)
+
+        if results.get('flip', False) and 'keypoint_types' in results:
+
+            if results.get('flip_direction', 'horizontal') == 'horizontal':
+                flip_indices = results['flip_indices']
+                types = results['keypoint_types']
+
+
+                results['keypoint_types'] = types[..., flip_indices]
+
+        return results
+
+@TRANSFORMS.register_module()
 class RandomHalfBody(BaseTransform):
     """Data augmentation with half-body transform that keeps only the upper or
     lower body at random.

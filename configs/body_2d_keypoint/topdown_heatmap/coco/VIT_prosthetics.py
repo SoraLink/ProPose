@@ -112,8 +112,7 @@ model = dict(
 train_pipeline = [
     dict(type='LoadImage', imdecode_backend='pillow'),
     dict(type='GetBBoxCenterScale'),
-    dict(type='RandomFlip', direction='horizontal'),
-    dict(type='RandomHalfBody'),
+    dict(type='CustomRandomFlip', direction='horizontal'),
     dict(type='ClampScale'),
     dict(type='RandomBBoxTransform'),
     # use_udp 建议先关掉，除非你明确知道你在做什么
