@@ -9,7 +9,7 @@ from mmpose.utils.tensor_utils import to_numpy
 
 
 @MODELS.register_module()
-class AnatomyAwareHead(HeatmapHead):
+class ContrastAnatomyAwareHead(HeatmapHead):
     def __init__(self,
                  type_loss_weight=1.0,
                  tau=1.0,

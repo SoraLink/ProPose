@@ -2,7 +2,6 @@ _base_ = [
     '../../../_base_/default_runtime.py',
     '../../../_base_/datasets/coco_wholebody.py'
 ]
-
 # ================= 1. 运行时设置 =================
 train_cfg = dict(max_epochs=210, val_interval=50)
 
@@ -76,7 +75,8 @@ model = dict(
         init_cfg=dict(
             type='Pretrained',
             # 使用 MMPretrain 官方提供的 MAE ViT-Large 权重
-            checkpoint='https://download.openmmlab.com/mmpretrain/v1.0/mae/mae_vit-large-p16_8xb512-pre_3rdparty_1600e_in1k/mae_vit-large-p16_8xb512-pre_3rdparty_1600e_in1k_20220613-a4130009.pth')
+            checkpoint='https://download.openmmlab.com/mmpose/'
+            'v1/pretrained_models/mae_pretrain_vit_large_20230913.pth')
     ),
     head=dict(
         type='HeatmapHead',
@@ -124,7 +124,7 @@ val_pipeline = [
 
 # Dataloader
 train_dataloader = dict(
-    batch_size=16,
+    batch_size=32,
     num_workers=8,
     persistent_workers=True,
     sampler=dict(type='DefaultSampler', shuffle=True),
