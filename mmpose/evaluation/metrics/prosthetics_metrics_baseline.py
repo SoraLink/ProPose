@@ -106,10 +106,19 @@ class ProstheticsMetric(CocoMetric):
 
         FAILURE_THR = 30.0
 
+        # 回归误差统计 (总体)
         kpt_oks_sums = np.zeros(num_kpts)
         kpt_epe_sums = np.zeros(num_kpts)
         kpt_counts = np.zeros(num_kpts)
         kpt_fail_counts = np.zeros(num_kpts)
+
+        # 回归误差统计 (细分 Type 0 和 Type 1)
+        kpt_norm_reg_counts = np.zeros(num_kpts)
+        kpt_norm_fail_counts = np.zeros(num_kpts)
+        kpt_pros_reg_counts = np.zeros(num_kpts)
+        kpt_pros_fail_counts = np.zeros(num_kpts)
+
+        # 分类准确率统计
         kpt_type_counts = np.zeros(num_kpts)
         kpt_type_correct_counts = np.zeros(num_kpts)
         kpt_missing_type_counts = np.zeros(num_kpts)
@@ -119,8 +128,7 @@ class ProstheticsMetric(CocoMetric):
         kpt_normal_type_counts = np.zeros(num_kpts)
         kpt_normal_type_correct_counts = np.zeros(num_kpts)
 
-        # 新增：用于统计 GT Type 到 Pred Type 的混淆矩阵 (3x3)
-        # 行代表 GT Type (0, 1, 2)，列代表 Pred Type (0, 1, 2)
+        # 用于统计 GT Type 到 Pred Type 的混淆矩阵 (3x3)
         type_confusion_matrix = np.zeros((3, 3), dtype=int)
 
         for res in results:
@@ -146,6 +154,7 @@ class ProstheticsMetric(CocoMetric):
                 kpt_type = gt_kpt_types[k]
                 pred_type = pred_kpt_types[k]
 
+                # --- 1. Type 分类准确率统计 ---
                 if v_g > 0:
                     kpt_type_counts[k] += 1
                     if pred_type == kpt_type:
@@ -166,16 +175,17 @@ class ProstheticsMetric(CocoMetric):
                         if pred_type == 2:
                             kpt_missing_type_correct_counts[k] += 1
 
-                    # 新增：记录混淆矩阵数据
+                    # 记录混淆矩阵数据 (仅对 0-22 基础关键点)
                     if k < 23:
                         if 0 <= kpt_type <= 2 and 0 <= pred_type <= 2:
                             type_confusion_matrix[kpt_type, pred_type] += 1
 
-                # 如果是 Absent (Type=2)，强制不可见，不参与统计
+                # --- 2. 回归距离与失败率统计 ---
+                # 如果是 Absent (Type=2)，强制不可见，不参与回归统计
                 if kpt_type == 2:
                     v_g = 0
 
-                if v_g > 0:  # 只统计 GT 存在的点
+                if v_g > 0:  # 只统计 GT 存在的点 (Type 0 和 Type 1)
                     x_g, y_g = gt_kpt[k][:2]
                     x_p, y_p = pred_kpts[k]
 
@@ -185,61 +195,71 @@ class ProstheticsMetric(CocoMetric):
                     # 计算 OKS
                     oks = np.exp(-dist_sq / (2 * (scale ** 2) * (sigmas[k] ** 2)))
 
-                    # 累加数据
+                    # 累加全局数据
                     kpt_oks_sums[k] += oks
                     kpt_epe_sums[k] += dist
                     kpt_counts[k] += 1
 
-                    # ❌ 判定坏点
-                    if dist > FAILURE_THR:
+                    is_fail = dist > FAILURE_THR
+                    if is_fail:
                         kpt_fail_counts[k] += 1
 
-        # 更新：将返回值改成包含 数量 和 比例 的字符串
-        def get_acc_str(correct, total):
-            return f"{int(correct)}/{int(total)} ({correct / total:.1%})" if total > 0 else "N/A"
+                    # 细分回归数据到 Normal 和 Prosthetic
+                    if kpt_type == 0:
+                        kpt_norm_reg_counts[k] += 1
+                        if is_fail:
+                            kpt_norm_fail_counts[k] += 1
+                    elif kpt_type == 1:
+                        kpt_pros_reg_counts[k] += 1
+                        if is_fail:
+                            kpt_pros_fail_counts[k] += 1
 
-        # 表格加宽到 155
-        print("\n" + "═" * 155)
+        # 格式化输出函数
+        def get_rate_str(val, total):
+            return f"{int(val)}/{int(total)} ({val / total:.1%})" if total > 0 else "N/A"
+
+        # 表格加宽到 185 以容纳新增列
+        print("\n" + "═" * 185)
         print(f"📉 Failure Threshold: > {FAILURE_THR} pixels")
-        print("─" * 155)
+        print("─" * 185)
 
-        # 表头列宽相应调大
-        header = f"{'ID':<4} | {'Keypoint Name':<22} | {'Avg OKS':<7} | {'Avg EPE':<7} | {'Fail (>30px)':<14} | {'All Acc':<18} | {'Norm Acc':<18} | {'Pros Acc':<18} | {'Miss Acc':<18}"
+        header = f"{'ID':<4} | {'Keypoint Name':<22} | {'Avg OKS':<7} | {'Avg EPE':<7} | {'Fail All':<14} | {'Fail Norm':<14} | {'Fail Pros':<14} | {'All Acc':<18} | {'Norm Acc':<18} | {'Pros Acc':<18} | {'Miss Acc':<18}"
         print(header)
-        print("─" * 155)
+        print("─" * 185)
 
         for i in range(num_kpts):
             name = self.dataset_meta['keypoint_id2name'].get(i, f"kp_{i}")
 
-            # 计算细分 Type Accuracy
-            acc_all = get_acc_str(kpt_type_correct_counts[i], kpt_type_counts[i])
-            acc_norm = get_acc_str(kpt_normal_type_correct_counts[i], kpt_normal_type_counts[i])
-            acc_pros = get_acc_str(kpt_pros_type_correct_counts[i], kpt_pros_type_counts[i])
-            acc_miss = get_acc_str(kpt_missing_type_correct_counts[i], kpt_missing_type_counts[i])
+            # Type 分类 Accurate 字符串
+            acc_all = get_rate_str(kpt_type_correct_counts[i], kpt_type_counts[i])
+            acc_norm = get_rate_str(kpt_normal_type_correct_counts[i], kpt_normal_type_counts[i])
+            acc_pros = get_rate_str(kpt_pros_type_correct_counts[i], kpt_pros_type_counts[i])
+            acc_miss = get_rate_str(kpt_missing_type_correct_counts[i], kpt_missing_type_counts[i])
 
-            # 计算回归指标
+            # 回归指标字符串
             if kpt_counts[i] > 0:
                 avg_oks = kpt_oks_sums[i] / kpt_counts[i]
                 avg_epe = kpt_epe_sums[i] / kpt_counts[i]
-                fail_count = int(kpt_fail_counts[i])
-                total_count = int(kpt_counts[i])
-                fail_rate = fail_count / total_count
 
                 oks_str = f"{avg_oks:.4f}"
                 epe_str = f"{avg_epe:.2f}"
-                fail_str = f"{fail_count}/{total_count} ({fail_rate:.1%})"
+
+                fail_all_str = get_rate_str(kpt_fail_counts[i], kpt_counts[i])
+                fail_norm_str = get_rate_str(kpt_norm_fail_counts[i], kpt_norm_reg_counts[i])
+                fail_pros_str = get_rate_str(kpt_pros_fail_counts[i], kpt_pros_reg_counts[i])
             else:
-                oks_str, epe_str, fail_str = "N/A", "N/A", "N/A"
+                oks_str, epe_str = "N/A", "N/A"
+                fail_all_str, fail_norm_str, fail_pros_str = "N/A", "N/A", "N/A"
 
             # 打印单行
             print(
-                f"{i:<4} | {name:<22} | {oks_str:<7} | {epe_str:<7} | {fail_str:<14} | {acc_all:<18} | {acc_norm:<18} | {acc_pros:<18} | {acc_miss:<18}")
+                f"{i:<4} | {name:<22} | {oks_str:<7} | {epe_str:<7} | {fail_all_str:<14} | {fail_norm_str:<14} | {fail_pros_str:<14} | {acc_all:<18} | {acc_norm:<18} | {acc_pros:<18} | {acc_miss:<18}")
 
         # ---------------------------------------------------------
-        # 新增：全局 Type 混淆矩阵报表 (Global Type Confusion Matrix)
+        # 全局 Type 混淆矩阵报表 (Excluded Residual Limbs 23-30)
         # ---------------------------------------------------------
-        print("─" * 155)
-        print("📊 Global Type Confusion Matrix (Row: GT Type, Col: Pred Type)")
+        print("─" * 185)
+        print("📊 Global Type Confusion Matrix (Excluded Residual Limbs 23-30, Row: GT, Col: Pred)")
         print(f"   {'':<14} | {'Pred Normal (0)':<20} | {'Pred Pros (1)':<20} | {'Pred Miss (2)':<20} | {'Total GT'}")
 
         type_names = ['GT Normal (0)', 'GT Pros (1)', 'GT Miss (2)']
@@ -264,35 +284,37 @@ class ProstheticsMetric(CocoMetric):
         res_type_idx = [idx for idx in range(23, 31) if kpt_type_counts[idx] > 0]
 
         if res_idx or res_type_idx:
-            print("─" * 155)
+            print("─" * 185)
             print(f"🔥 Residual Limbs (23-30) Summary:")
 
             if res_idx:
                 res_avg_oks = np.sum(kpt_oks_sums[res_idx]) / np.sum(kpt_counts[res_idx])
+
                 res_fail_sum = np.sum(kpt_fail_counts[res_idx])
                 res_total_sum = np.sum(kpt_counts[res_idx])
-                res_fail_rate = res_fail_sum / res_total_sum
+                res_fail_norm_sum = np.sum(kpt_norm_fail_counts[res_idx])
+                res_norm_tot = np.sum(kpt_norm_reg_counts[res_idx])
+                res_fail_pros_sum = np.sum(kpt_pros_fail_counts[res_idx])
+                res_pros_tot = np.sum(kpt_pros_reg_counts[res_idx])
 
                 print(f"   Total Avg OKS: {res_avg_oks:.4f}")
-                print(f"   Failure Rate : {int(res_fail_sum)}/{int(res_total_sum)} ({res_fail_rate:.1%})")
+                print(f"   Failure Rate : {get_rate_str(res_fail_sum, res_total_sum)}")
+                print(f"     - Fail Normal  : {get_rate_str(res_fail_norm_sum, res_norm_tot)}")
+                print(f"     - Fail Pros    : {get_rate_str(res_fail_pros_sum, res_pros_tot)}")
 
             if res_type_idx:
                 tot_correct = np.sum(kpt_type_correct_counts[res_type_idx])
                 tot_count = np.sum(kpt_type_counts[res_type_idx])
-
                 norm_correct = np.sum(kpt_normal_type_correct_counts[res_type_idx])
                 norm_count = np.sum(kpt_normal_type_counts[res_type_idx])
-
                 pros_correct = np.sum(kpt_pros_type_correct_counts[res_type_idx])
                 pros_count = np.sum(kpt_pros_type_counts[res_type_idx])
-
                 miss_correct = np.sum(kpt_missing_type_correct_counts[res_type_idx])
                 miss_count = np.sum(kpt_missing_type_counts[res_type_idx])
 
-                # 这里的 get_acc_str 已经包含了 count，所以直接调用即可，不需要额外再拼字符串了
-                print(f"   Overall Type Acc : {get_acc_str(tot_correct, tot_count)}")
-                print(f"     - Normal Acc   : {get_acc_str(norm_correct, norm_count)}")
-                print(f"     - Pros Acc     : {get_acc_str(pros_correct, pros_count)}")
-                print(f"     - Missing Acc  : {get_acc_str(miss_correct, miss_count)}")
+                print(f"   Overall Type Acc : {get_rate_str(tot_correct, tot_count)}")
+                print(f"     - Normal Acc   : {get_rate_str(norm_correct, norm_count)}")
+                print(f"     - Pros Acc     : {get_rate_str(pros_correct, pros_count)}")
+                print(f"     - Missing Acc  : {get_rate_str(miss_correct, miss_count)}")
 
-        print("═" * 155 + "\n")
+        print("═" * 185 + "\n")

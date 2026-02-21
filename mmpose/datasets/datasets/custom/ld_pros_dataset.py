@@ -1,5 +1,8 @@
+import os
+
 import numpy as np
 import torch
+from pycocotools.coco import COCO
 
 from mmpose.registry import DATASETS
 from mmpose.datasets import CocoDataset
@@ -110,6 +113,105 @@ class LDProsDataset(CocoDataset):
         ],
     }
 
+    def __init__(self, **kwargs):
+        # 1. 绝对强制获取参数，没有任何 Fallback
+        if 'data_root' not in kwargs or not kwargs['data_root']:
+            raise ValueError(f"❌ Initialization Failed: '{self.__class__.__name__}' requires a valid 'data_root'.")
+
+        if 'ann_file' not in kwargs or not kwargs['ann_file']:
+            raise ValueError(f"❌ Initialization Failed: '{self.__class__.__name__}' requires a valid 'ann_file'.")
+
+        data_root = kwargs['data_root']
+        ann_file = kwargs['ann_file']
+        full_ann_file = os.path.join(data_root, ann_file)
+
+        # 2. 严格校验文件是否存在
+        if not os.path.exists(full_ann_file):
+            raise FileNotFoundError(f"❌ Annotation file does not exist: '{full_ann_file}'. "
+                                    f"Cannot compute Class-Balanced Weights!")
+
+        # 3. 使用标准的 COCO API 提前读取标注并算好权重
+        print(f"[{self.__class__.__name__}] Loading annotations via pycocotools for weight calculation...")
+        temp_coco = COCO(full_ann_file)
+        self._compute_cb_weights(temp_coco)
+
+        # 4. 权重表准备就绪，按动启动按钮，交由父类执行后续流程
+        super().__init__(**kwargs)
+
+    def _compute_cb_weights(self, coco_api, beta=0.999, reg_weight_cap=5.0):
+        """
+        利用 pycocotools 传入的 coco_api 统计点位比例
+        """
+        print(f"[{self.__class__.__name__}] Calculating Global Class-Balanced Weights...")
+        num_kpts = self.METAINFO['num_keypoints']
+        counts = np.zeros((num_kpts, 3), dtype=int)
+
+        # 1. 全局统计：直接复用你最初写的那套优雅的 coco.anns.values() 遍历
+        for ann in coco_api.anns.values():
+            if 'keypoints' not in ann or 'keypoint_types' not in ann:
+                continue
+
+            kps = np.array(ann['keypoints']).reshape(-1, 3)
+            vis = kps[:, 2]
+            types = np.array(ann['keypoint_types'])
+
+            for k in range(num_kpts):
+                if vis[k] > 0:
+                    t = types[k]
+                    if 0 <= t <= 2:
+                        counts[k, t] += 1
+
+        # 辅助函数：计算有效样本量倒数
+        def get_type_w(n):
+            if n == 0: return 0.0
+            return 1.0 / np.sqrt(n)
+
+        self.W_type_table = np.zeros((num_kpts, 3), dtype=np.float32)
+        self.W_reg_table = np.zeros((num_kpts, 2), dtype=np.float32)
+
+        # 2. 计算 Semantic Type 的权重表 (31x3)
+        for k in range(num_kpts):
+            for c in range(3):
+                if k >= 23 and c == 1:
+                    print(f"[{self.__class__.__name__}] Skipping RES KP {k} (Type 2) for Weight Calculation.")
+                    continue
+                self.W_type_table[k, c] = get_type_w(counts[k, c])
+
+            # 点内归一化
+            valid_mask = self.W_type_table[k] > 0
+            if valid_mask.sum() > 0:
+                self.W_type_table[k, valid_mask] /= self.W_type_table[k, valid_mask].mean()
+
+        # 3. 计算 Regression 的权重表 (31x2, 仅含 0 和 1)
+        basic_total_counts = counts[0:23, 0] + counts[0:23, 1]
+        avg_basic_count = np.mean(basic_total_counts)
+        anchor_eff = (1.0 - np.power(beta, avg_basic_count)) / (1.0 - beta)
+
+        for k in range(num_kpts):
+            if k < 23:
+                # 基础点 (0-22): 点内平衡
+
+                c_norm = max(1, counts[k, 0])
+                c_pros = max(1, counts[k, 1])
+
+                w_norm = np.sqrt(avg_basic_count / c_norm)
+                w_pros = np.sqrt(avg_basic_count / c_pros) if counts[k, 1] > 0 else 0.0
+
+
+                self.W_reg_table[k, 0] = min(w_norm, reg_weight_cap)
+                self.W_reg_table[k, 1] = min(w_pros, reg_weight_cap)
+            else:
+                # 残肢点 (23-30): 点间平衡
+                c_norm = max(1, counts[k, 0])
+                w_norm = np.sqrt(avg_basic_count / c_norm)
+
+                self.W_reg_table[k, 0] = min(w_norm, reg_weight_cap)
+                self.W_reg_table[k, 1] = 0.0
+
+        self.global_type_weights = torch.from_numpy(self.W_type_table).float()
+        print(f"[{self.__class__.__name__}] Weights Calculation Completed.")
+
+
     def parse_data_info(self, raw_data_info):
         """
         读取 JSON 中的 keypoint_types 并存入 data_info
@@ -119,6 +221,8 @@ class LDProsDataset(CocoDataset):
         # 获取 raw_ann_info (MMPose v1.x 标准结构)
         ann_info = raw_data_info.get('raw_ann_info', {})
 
+        num_kpts = self.METAINFO['num_keypoints']
+
         # 假设 JSON 里有一个 key 叫 "keypoint_types"
         if 'keypoint_types' in ann_info:
             types = np.array(ann_info['keypoint_types'], dtype=np.int64)
@@ -126,6 +230,23 @@ class LDProsDataset(CocoDataset):
         else:
             # 默认填充 0 (假设 0 代表正常点，非0代表特殊点)
             raise ValueError('keypoint_types not found in raw_ann_info')
+
+        instance_reg_weight = np.ones((1, num_kpts, 1), dtype=np.float32)
+
+        if hasattr(self, 'W_reg_table'):
+            for k in range(num_kpts):
+                t = types[k]
+                # Type 为 0 或 1 时查表，Type 为 2 (Missing) 时权重直接置 0
+                if t == 0 or t == 1:
+                    instance_reg_weight[0, k, 0] = self.W_reg_table[k, t]
+                elif t == 2:
+                    instance_reg_weight[0, k, 0] = 0.0
+
+        data_info['custom_reg_weights'] = instance_reg_weight
+
+        # 如果你想把分类矩阵也丢进去（虽然通常分类 Loss 是全局固定的，传给 Loss 模块即可，但也放进数据流备用）
+
+        data_info['global_type_weights'] = self.global_type_weights[None, :, :]
 
         data_info['instance_mapping_table'] = dict(
             bbox='bboxes',
@@ -135,7 +256,9 @@ class LDProsDataset(CocoDataset):
             keypoints_visible='keypoints_visible',
             bbox_scale='bbox_scales',
             head_size='head_size',
-            keypoint_types='keypoint_types'
+            keypoint_types='keypoint_types',
+            custom_reg_weights='custom_reg_weights',
+            global_type_weights='global_type_weights',
         )
 
         return data_info
