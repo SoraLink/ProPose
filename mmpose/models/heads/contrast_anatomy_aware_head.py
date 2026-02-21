@@ -85,7 +85,8 @@ class ContrastAnatomyAwareHead(HeatmapHead):
         losses['loss_kpt'] = loss_kpt
 
         # BioContrastive Loss
-        p_bio = pred_type_logits[:, :, 0]  # [B, K]
+        type_probs = torch.softmax(pred_type_logits, dim=-1)
+        p_bio = type_probs[:, :, 0]
 
         loss_bio_total = 0.0
         valid_r_count = 0.0

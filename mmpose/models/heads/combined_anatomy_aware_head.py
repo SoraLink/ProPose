@@ -107,7 +107,8 @@ class CombinedAnatomyAwareHead(HeatmapHead):
         losses['loss_kpt'] = loss_kpt
 
         # BioContrastive Loss
-        p_bio = pred_type_logits[:, :, 0]  # [B, K]
+        type_probs = torch.softmax(pred_type_logits, dim=-1)  # [B*K, 3] 变 [B, K, 3]
+        p_bio = type_probs[:, :, 0]  # [B, K] 提取绝对在 0~1 之间的正常肉体概率
 
         loss_bio_total = 0.0
         valid_r_count = 0.0
