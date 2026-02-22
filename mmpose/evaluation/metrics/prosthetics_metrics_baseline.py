@@ -48,9 +48,9 @@ class ProstheticsMetric(CocoMetric):
 
             if 'keypoint_types' in data_sample['pred_instances']:
                 pred_type = data_sample['pred_instances']['keypoint_types'].cpu().numpy()
+                type_probs = data_sample['pred_instances']['type_scores'].cpu().numpy()
             else:
-                num_kps = data_sample['pred_instances']['keypoints'].shape[1]
-                pred_type = np.zeros((num_kps,), dtype=int)
+                raise ValueError('Keypoint types are not available in the prediction results.')
 
             gt_type = data_sample['gt_instances']['keypoint_types'].cpu().numpy()
             types = np.array(gt_type, dtype=np.int64)
@@ -59,6 +59,7 @@ class ProstheticsMetric(CocoMetric):
             target_result[0]['pred_types'] = pred_type
             target_result[0]['gt_types'] = gt_type
             target_result[0]['gt_instances'] = data_sample['gt_instances']
+            target_result[0]['type_scores'] = type_probs
 
     def compute_metrics(self, results):
 
@@ -100,297 +101,322 @@ class ProstheticsMetric(CocoMetric):
 
         return raw_metrics
 
+    # =========================================================================
+    # 主入口：统计报表调度器
+    # =========================================================================
     def report_custom_stats(self, results):
-        import numpy as np
+        # 1. 对预测结果应用后处理，并在 instance 中保存 before 和 after 两种标签
+        total_corrected = self._apply_post_processing_to_results(results)
 
-        sigmas = self.dataset_meta['sigmas']
-        num_kpts = len(sigmas)
+        # 2. 分别计算后处理前后的统计指标
+        metrics_before = self._calculate_metrics(results, type_key='pred_types_before')
+        metrics_after = self._calculate_metrics(results, type_key='pred_types_after')
 
-        FAILURE_THR = 30.0
+        # 3. 打印详细对比报表
+        self._print_metrics_table(metrics_before, title="🛑 BEFORE Post-Processing (Raw Output)")
+        self._print_metrics_table(metrics_after, title="✅ AFTER Post-Processing (Hierarchical Rules)")
 
-        # 🌟 定义四肢与残肢白名单 (过滤掉面部、躯干等必定为 Normal 的“送分题”点)
-        # 根据标准 COCO + 扩充点，通常 7-10 是手臂，13-16 是腿，17-22 可能是手脚，23-30 是残肢
-        LIMB_AND_RES_KPTS = [
-            7, 8, 9, 10,  # 肘部、手腕
-            13, 14, 15, 16,  # 膝盖、脚踝
-            17, 18, 19, 20, 21, 22,  # 手、脚掌等扩充点
-            23, 24, 25, 26, 27, 28, 29, 30  # 残肢截断点
-        ]
+        # 4. 打印干预总结与差异
+        self._print_intervention_summary(total_corrected, metrics_before, metrics_after)
 
-        # 回归误差统计 (总体 & 细分)
-        kpt_oks_sums = np.zeros(num_kpts)
-        kpt_epe_sums = np.zeros(num_kpts)
-        kpt_counts = np.zeros(num_kpts)
-        kpt_fail_counts = np.zeros(num_kpts)
+        # 5. 推送到 Weights & Biases
+        self._log_to_wandb(metrics_after, metrics_before, total_corrected)
 
-        kpt_norm_reg_counts = np.zeros(num_kpts)
-        kpt_norm_fail_counts = np.zeros(num_kpts)
-        kpt_pros_reg_counts = np.zeros(num_kpts)
-        kpt_pros_fail_counts = np.zeros(num_kpts)
+    # =========================================================================
+    # 模块 1：分层启发式后处理 (核心逻辑)
+    # =========================================================================
+    def _apply_post_processing_to_results(self, results):
+        omega_dict = {
+            23: [7, 9, 17, 25],
+            24: [8, 10, 18, 26],
+            25: [9, 17, 23],
+            26: [10, 18, 24],
+            27: [13, 15, 19, 21, 29],
+            28: [14, 16, 20, 22, 30],
+            29: [15, 19, 21, 27],
+            30: [16, 20, 22, 28],
+        }
+        limb_residual_pairs = [(23, 25), (24, 26), (27, 29), (28, 30)]
 
-        # 分类准确率统计
-        kpt_type_counts = np.zeros(num_kpts)
-        kpt_type_correct_counts = np.zeros(num_kpts)
-        kpt_missing_type_counts = np.zeros(num_kpts)
-        kpt_missing_type_correct_counts = np.zeros(num_kpts)
-        kpt_pros_type_counts = np.zeros(num_kpts)
-        kpt_pros_type_correct_counts = np.zeros(num_kpts)
-        kpt_normal_type_counts = np.zeros(num_kpts)
-        kpt_normal_type_correct_counts = np.zeros(num_kpts)
-
-        type_confusion_matrix = np.zeros((3, 3), dtype=int)
-
-        # 🌟 概率收集器：用于 W&B 画 ROC 曲线和计算 AUC
-        all_y_true = []  # 仅存放白名单内的核心点
-        all_y_probs = []
-        kpt_y_true = [[] for _ in range(num_kpts)]  # 存放 31 个每个点专属的真实标签
-        kpt_y_probs = [[] for _ in range(num_kpts)]  # 存放 31 个每个点专属的预测概率
+        total_violations_corrected = 0
 
         for res in results:
             instance = res[0]
-            pred_kpts = instance['keypoints'][0]  # [31, 2]
-
-            gt_kpt = instance['gt_instances']['keypoints'][0]
             gt_v = instance['gt_instances']['keypoints_visible'][0]
+            pred_types_before = instance['pred_types'][0].copy()
+            pred_type_scores = instance['type_scores'][0]
 
-            if 'keypoint_types' in instance['gt_instances']:
-                gt_kpt_types = instance['gt_instances']['keypoint_types'][0]
-                pred_kpt_types = instance['pred_types'][0]
-                pred_type_scores = instance['type_scores'][0]
-            else:
-                raise ValueError("Keypoint types are not available.")
+            # 保存原始预测
+            instance['pred_types_before'] = pred_types_before
+            pred_types_after = pred_types_before.copy()
 
-            area = instance['areas'][0]
-            if isinstance(area, (list, np.ndarray)): area = area[0]
-            scale = np.sqrt(area)
+            for upper_r, lower_r in limb_residual_pairs:
+                # --- Step 1: 内部肃清 (上下残肢互斥) ---
+                if pred_types_after[upper_r] == 0 and pred_types_after[lower_r] == 0:
+                    p_up = pred_type_scores[upper_r][0]
+                    p_low = pred_type_scores[lower_r][0]
+                    if p_up > p_low:
+                        pred_types_after[lower_r] = 2
+                        if gt_v[lower_r] > 0: total_violations_corrected += 1
+                    else:
+                        pred_types_after[upper_r] = 2
+                        if gt_v[upper_r] > 0: total_violations_corrected += 1
+
+                # --- Step 2: 锁定唯一存活残肢 ---
+                active_r = upper_r if pred_types_after[upper_r] == 0 else (
+                    lower_r if pred_types_after[lower_r] == 0 else None)
+
+                # --- Step 3: 残肢 vs 下游聚合对抗 ---
+                if active_r is not None:
+                    downstream_anatomy_nodes = [j for j in omega_dict[active_r] if j < 23]
+                    if len(downstream_anatomy_nodes) > 0:
+                        avg_down_norm = sum(pred_type_scores[j][0] for j in downstream_anatomy_nodes) / len(
+                            downstream_anatomy_nodes)
+                        prob_r_normal = pred_type_scores[active_r][0]
+
+                        if prob_r_normal > avg_down_norm:
+                            # 残肢胜出，连坐修改下游
+                            for j in downstream_anatomy_nodes:
+                                if pred_types_after[j] == 0:
+                                    p_pros, p_miss = pred_type_scores[j][1], pred_type_scores[j][2]
+                                    pred_types_after[j] = 1 if p_pros > p_miss else 2
+                                    if gt_v[j] > 0: total_violations_corrected += 1
+                        else:
+                            # 下游胜出，残肢是幻觉
+                            pred_types_after[active_r] = 2
+                            if gt_v[active_r] > 0: total_violations_corrected += 1
+
+            instance['pred_types_after'] = pred_types_after
+
+        return total_violations_corrected
+
+    # =========================================================================
+    # 模块 2：指标计算引擎 (回归统计全量保留，分类统计仅限四肢残肢)
+    # =========================================================================
+    def _calculate_metrics(self, results, type_key):
+        import numpy as np
+        sigmas = self.dataset_meta['sigmas']
+        num_kpts = len(sigmas)
+        FAILURE_THR = 30.0
+
+        # 🌟 白名单：分类准确率、AUC、混淆矩阵 只看这些区域
+        LIMB_AND_RES_KPTS = [7, 8, 9, 10, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30]
+
+        m = {
+            'oks_sums': np.zeros(num_kpts), 'epe_sums': np.zeros(num_kpts), 'counts': np.zeros(num_kpts),
+            'fail_counts': np.zeros(num_kpts), 'norm_reg_counts': np.zeros(num_kpts),
+            'norm_fail_counts': np.zeros(num_kpts),
+            'pros_reg_counts': np.zeros(num_kpts), 'pros_fail_counts': np.zeros(num_kpts),
+            'type_counts': np.zeros(num_kpts), 'type_correct': np.zeros(num_kpts),
+            'norm_counts': np.zeros(num_kpts), 'norm_correct': np.zeros(num_kpts),
+            'pros_counts': np.zeros(num_kpts), 'pros_correct': np.zeros(num_kpts),
+            'miss_counts': np.zeros(num_kpts), 'miss_correct': np.zeros(num_kpts),
+            'confusion': np.zeros((3, 3), dtype=int),
+            'global_correct': 0, 'global_total_valid': 0
+        }
+
+        all_y_true, all_y_probs = [], []
+        kpt_y_true = [[] for _ in range(num_kpts)]
+        kpt_y_probs = [[] for _ in range(num_kpts)]
+
+        for res in results:
+            inst = res[0]
+            pred_kpts = inst['keypoints'][0]
+            gt_kpt = inst['gt_instances']['keypoints'][0]
+            gt_v = inst['gt_instances']['keypoints_visible'][0]
+            gt_types = inst['gt_instances']['keypoint_types'][0]
+            pred_types = inst[type_key]
+            type_scores = inst['type_scores'][0]
+
+            area = inst['areas'][0]
+            scale = np.sqrt(area[0] if isinstance(area, (list, np.ndarray)) else area)
 
             for k in range(num_kpts):
-                v_g = gt_v[k]
-                kpt_type = gt_kpt_types[k]
-                pred_type = pred_kpt_types[k]
+                v_g, gt_t, pr_t = gt_v[k], gt_types[k], pred_types[k]
 
-                # --- 1. Type 分类准确率统计与概率收集 ---
+                # -----------------------------------------------------------------
+                # 🌟 1. 分类统计 & 概率收集 (严格限制在四肢和残肢白名单内)
+                # -----------------------------------------------------------------
+                if k in LIMB_AND_RES_KPTS:
+                    if v_g > 0:
+                        m['global_total_valid'] += 1
+                        if pr_t == gt_t: m['global_correct'] += 1
+
+                        prob_arr = type_scores[k].cpu().numpy() if hasattr(type_scores[k], 'cpu') else type_scores[
+                            k]
+
+                        all_y_true.append(gt_t)
+                        all_y_probs.append(prob_arr)
+                        kpt_y_true[k].append(gt_t)
+                        kpt_y_probs[k].append(prob_arr)
+
+                        m['type_counts'][k] += 1
+                        if pr_t == gt_t: m['type_correct'][k] += 1
+                        if gt_t == 0:
+                            m['norm_counts'][k] += 1; m['norm_correct'][k] += (pr_t == 0)
+                        elif gt_t == 1:
+                            m['pros_counts'][k] += 1; m['pros_correct'][k] += (pr_t == 1)
+                        elif gt_t == 2:
+                            m['miss_counts'][k] += 1; m['miss_correct'][k] += (pr_t == 2)
+
+                        # 记录 23 以前的基础点混淆矩阵 (现在只包含基础点里的四肢)
+                        if k < 23 and 0 <= gt_t <= 2 and 0 <= pr_t <= 2:
+                            m['confusion'][gt_t, pr_t] += 1
+
+                # -----------------------------------------------------------------
+                # 🌟 2. 回归统计 (所有点都参与，展现模型的整体定位硬实力)
+                # -----------------------------------------------------------------
+                # Type 2 缺失点本质上不在图里，不参与距离回归计算
+                if gt_t == 2: v_g = 0
                 if v_g > 0:
-                    # 兼容 Tensor 或 Numpy
-                    prob_array = pred_type_scores[k].cpu().numpy() if hasattr(pred_type_scores[k], 'cpu') else \
-                    pred_type_scores[k]
+                    dist = np.sqrt((pred_kpts[k][0] - gt_kpt[k][0]) ** 2 + (pred_kpts[k][1] - gt_kpt[k][1]) ** 2)
+                    oks = np.exp(-(dist ** 2) / (2 * (scale ** 2) * (sigmas[k] ** 2)))
 
-                    # 🌟 仅收集白名单核心点到全局池子
-                    if k in LIMB_AND_RES_KPTS:
-                        all_y_true.append(kpt_type)
-                        all_y_probs.append(prob_array)
-
-                    # 专属池子依然全部收集（后续计算会自动过滤无效点）
-                    kpt_y_true[k].append(kpt_type)
-                    kpt_y_probs[k].append(prob_array)
-
-                    kpt_type_counts[k] += 1
-                    if pred_type == kpt_type:
-                        kpt_type_correct_counts[k] += 1
-
-                    if kpt_type == 0:
-                        kpt_normal_type_counts[k] += 1
-                        if pred_type == 0:
-                            kpt_normal_type_correct_counts[k] += 1
-                    elif kpt_type == 1:
-                        kpt_pros_type_counts[k] += 1
-                        if pred_type == 1:
-                            kpt_pros_type_correct_counts[k] += 1
-                    elif kpt_type == 2:
-                        kpt_missing_type_counts[k] += 1
-                        if pred_type == 2:
-                            kpt_missing_type_correct_counts[k] += 1
-
-                    # 记录混淆矩阵数据 (仅对 0-22 基础人体关键点)
-                    if k < 23:
-                        if 0 <= kpt_type <= 2 and 0 <= pred_type <= 2:
-                            type_confusion_matrix[kpt_type, pred_type] += 1
-
-                # --- 2. 回归距离与失败率统计 ---
-                # 如果是 Absent (Type=2)，强制不可见，不参与回归统计
-                if kpt_type == 2:
-                    v_g = 0
-
-                if v_g > 0:
-                    x_g, y_g = gt_kpt[k][:2]
-                    x_p, y_p = pred_kpts[k]
-
-                    dist_sq = (x_p - x_g) ** 2 + (y_p - y_g) ** 2
-                    dist = np.sqrt(dist_sq)
-
-                    oks = np.exp(-dist_sq / (2 * (scale ** 2) * (sigmas[k] ** 2)))
-
-                    kpt_oks_sums[k] += oks
-                    kpt_epe_sums[k] += dist
-                    kpt_counts[k] += 1
-
+                    m['oks_sums'][k] += oks;
+                    m['epe_sums'][k] += dist;
+                    m['counts'][k] += 1
                     is_fail = dist > FAILURE_THR
-                    if is_fail:
-                        kpt_fail_counts[k] += 1
+                    if is_fail: m['fail_counts'][k] += 1
+                    if gt_t == 0:
+                        m['norm_reg_counts'][k] += 1; m['norm_fail_counts'][k] += is_fail
+                    elif gt_t == 1:
+                        m['pros_reg_counts'][k] += 1; m['pros_fail_counts'][k] += is_fail
 
-                    if kpt_type == 0:
-                        kpt_norm_reg_counts[k] += 1
-                        if is_fail:
-                            kpt_norm_fail_counts[k] += 1
-                    elif kpt_type == 1:
-                        kpt_pros_reg_counts[k] += 1
-                        if is_fail:
-                            kpt_pros_fail_counts[k] += 1
+        # 计算 AUC
+        m['kpt_auc'] = np.full(num_kpts, np.nan)
+        m['macro_auc'] = np.nan
+        m['all_y_true'] = np.array(all_y_true)
+        m['all_y_probs'] = np.array(all_y_probs)
 
-        # 🌟 计算每个关键点的独立 AUC
-        kpt_auc_scores = np.full(num_kpts, np.nan)
         try:
             from sklearn.metrics import roc_auc_score
             for i in range(num_kpts):
-                if len(kpt_y_true[i]) > 0:
-                    # 安全校验：必须有至少两个不同的类别，否则无法计算 AUC
-                    if len(np.unique(kpt_y_true[i])) > 1:
-                        kpt_auc_scores[i] = roc_auc_score(
-                            kpt_y_true[i], kpt_y_probs[i],
-                            multi_class='ovr', average='macro'
-                        )
-        except ImportError:
+                if len(kpt_y_true[i]) > 0 and len(np.unique(kpt_y_true[i])) > 1:
+                    m['kpt_auc'][i] = roc_auc_score(kpt_y_true[i], kpt_y_probs[i], multi_class='ovr',
+                                                    average='macro')
+            if len(all_y_true) > 0:
+                m['macro_auc'] = roc_auc_score(m['all_y_true'], m['all_y_probs'], multi_class='ovr',
+                                               average='macro')
+        except:
             pass
 
-        def get_rate_str(val, total):
-            return f"{int(val)}/{int(total)} ({val / total:.1%})" if total > 0 else "N/A"
+        return m
 
-        # 打印加宽大表
-        print("\n" + "═" * 195)
-        print(f"📉 Failure Threshold: > {FAILURE_THR} pixels")
-        print("─" * 195)
+    # =========================================================================
+    # 模块 3：打印单一报表表单
+    # =========================================================================
+    def _print_metrics_table(self, m, title):
+        import numpy as np
+        num_kpts = len(self.dataset_meta['sigmas'])
 
-        header = f"{'ID':<4} | {'Keypoint Name':<22} | {'Avg OKS':<7} | {'Avg EPE':<7} | {'Fail All':<14} | {'Fail Norm':<14} | {'Fail Pros':<14} | {'All Acc':<18} | {'Norm Acc':<18} | {'Pros Acc':<18} | {'Miss Acc':<18} | {'Macro AUC':<9}"
+        def rate_str(v, t):
+            return f"{int(v)}/{int(t)} ({v / t:.1%})" if t > 0 else "N/A"
+
+        # 🌟 统一调整列宽，解决数据量大时的撑爆错位问题
+        w_id, w_name, w_oks, w_epe, w_rate, w_auc = 4, 22, 7, 7, 22, 9
+        # 动态计算总宽度：所有列宽之和 + 11个分隔符(' | ' = 3个字符)
+        total_w = w_id + w_name + w_oks + w_epe + (w_rate * 7) + w_auc + 33
+
+        print("\n" + "═" * total_w)
+        print(f"{title}")
+        print("─" * total_w)
+
+        header = (f"{'ID':<{w_id}} | {'Keypoint Name':<{w_name}} | {'Avg OKS':<{w_oks}} | {'Avg EPE':<{w_epe}} | "
+                  f"{'Fail All':<{w_rate}} | {'Fail Norm':<{w_rate}} | {'Fail Pros':<{w_rate}} | "
+                  f"{'All Acc':<{w_rate}} | {'Norm Acc':<{w_rate}} | {'Pros Acc':<{w_rate}} | "
+                  f"{'Miss Acc':<{w_rate}} | {'Macro AUC':<{w_auc}}")
         print(header)
-        print("─" * 195)
+        print("─" * total_w)
 
         for i in range(num_kpts):
             name = self.dataset_meta['keypoint_id2name'].get(i, f"kp_{i}")
+            acc_a = rate_str(m['type_correct'][i], m['type_counts'][i])
+            acc_n = rate_str(m['norm_correct'][i], m['norm_counts'][i])
+            acc_p = rate_str(m['pros_correct'][i], m['pros_counts'][i])
+            acc_m = rate_str(m['miss_correct'][i], m['miss_counts'][i])
 
-            acc_all = get_rate_str(kpt_type_correct_counts[i], kpt_type_counts[i])
-            acc_norm = get_rate_str(kpt_normal_type_correct_counts[i], kpt_normal_type_counts[i])
-            acc_pros = get_rate_str(kpt_pros_type_correct_counts[i], kpt_pros_type_counts[i])
-            acc_miss = get_rate_str(kpt_missing_type_correct_counts[i], kpt_missing_type_counts[i])
-
-            if kpt_counts[i] > 0:
-                avg_oks = kpt_oks_sums[i] / kpt_counts[i]
-                avg_epe = kpt_epe_sums[i] / kpt_counts[i]
-                oks_str = f"{avg_oks:.4f}"
-                epe_str = f"{avg_epe:.2f}"
-                fail_all_str = get_rate_str(kpt_fail_counts[i], kpt_counts[i])
-                fail_norm_str = get_rate_str(kpt_norm_fail_counts[i], kpt_norm_reg_counts[i])
-                fail_pros_str = get_rate_str(kpt_pros_fail_counts[i], kpt_pros_reg_counts[i])
+            if m['counts'][i] > 0:
+                o_str = f"{m['oks_sums'][i] / m['counts'][i]:.4f}"
+                e_str = f"{m['epe_sums'][i] / m['counts'][i]:.2f}"
+                f_a = rate_str(m['fail_counts'][i], m['counts'][i])
+                f_n = rate_str(m['norm_fail_counts'][i], m['norm_reg_counts'][i])
+                f_p = rate_str(m['pros_fail_counts'][i], m['pros_reg_counts'][i])
             else:
-                oks_str, epe_str = "N/A", "N/A"
-                fail_all_str, fail_norm_str, fail_pros_str = "N/A", "N/A", "N/A"
+                o_str, e_str, f_a, f_n, f_p = "N/A", "N/A", "N/A", "N/A", "N/A"
 
-            auc_str = f"{kpt_auc_scores[i]:.4f}" if not np.isnan(kpt_auc_scores[i]) else "N/A"
+            auc_str = f"{m['kpt_auc'][i]:.4f}" if not np.isnan(m['kpt_auc'][i]) else "N/A"
 
-            print(
-                f"{i:<4} | {name:<22} | {oks_str:<7} | {epe_str:<7} | {fail_all_str:<14} | {fail_norm_str:<14} | {fail_pros_str:<14} | {acc_all:<18} | {acc_norm:<18} | {acc_pros:<18} | {acc_miss:<18} | {auc_str:<9}")
+            row = (f"{i:<{w_id}} | {name:<{w_name}} | {o_str:<{w_oks}} | {e_str:<{w_epe}} | "
+                   f"{f_a:<{w_rate}} | {f_n:<{w_rate}} | {f_p:<{w_rate}} | "
+                   f"{acc_a:<{w_rate}} | {acc_n:<{w_rate}} | {acc_p:<{w_rate}} | "
+                   f"{acc_m:<{w_rate}} | {auc_str:<{w_auc}}")
+            print(row)
 
-        # ---------------------------------------------------------
-        # 全局 Type 混淆矩阵报表 (Excluded Residual Limbs 23-30)
-        # ---------------------------------------------------------
-        print("─" * 195)
-        print("📊 Global Type Confusion Matrix (Excluded Residual Limbs 23-30, Row: GT, Col: Pred)")
-        print(f"   {'':<14} | {'Pred Normal (0)':<20} | {'Pred Pros (1)':<20} | {'Pred Miss (2)':<20} | {'Total GT'}")
-
-        type_names = ['GT Normal (0)', 'GT Pros (1)', 'GT Miss (2)']
+        # 混淆矩阵部分
+        print("─" * total_w)
+        print("📊 Global Type Confusion Matrix (Excluded Residual Limbs 23-30)")
+        tn = ['GT Normal(0)', 'GT Pros(1)', 'GT Miss(2)']
         for i in range(3):
-            row_total = np.sum(type_confusion_matrix[i])
-            if row_total > 0:
-                p0 = type_confusion_matrix[i, 0] / row_total
-                p1 = type_confusion_matrix[i, 1] / row_total
-                p2 = type_confusion_matrix[i, 2] / row_total
-                s0 = f"{type_confusion_matrix[i, 0]} ({p0:.1%})"
-                s1 = f"{type_confusion_matrix[i, 1]} ({p1:.1%})"
-                s2 = f"{type_confusion_matrix[i, 2]} ({p2:.1%})"
-            else:
-                s0, s1, s2 = "0 (0.0%)", "0 (0.0%)", "0 (0.0%)"
+            rt = np.sum(m['confusion'][i])
+            s = [f"{m['confusion'][i, j]} ({m['confusion'][i, j] / rt:.1%})" if rt > 0 else "0 (0.0%)" for j in
+                 range(3)]
+            print(f"   {tn[i]:<14} | {s[0]:<20} | {s[1]:<20} | {s[2]:<20} | {rt}")
 
-            print(f"   {type_names[i]:<14} | {s0:<20} | {s1:<20} | {s2:<20} | {row_total}")
+        print("═" * total_w + "\n")
 
-        # ---------------------------------------------------------
-        # 汇总残肢数据 (Residual Limbs 23-30)
-        # ---------------------------------------------------------
-        res_idx = [idx for idx in range(23, 31) if kpt_counts[idx] > 0]
-        res_type_idx = [idx for idx in range(23, 31) if kpt_type_counts[idx] > 0]
+    # =========================================================================
+    # 模块 4：干预差异总结 (Ablation Comparison)
+    # =========================================================================
+    def _print_intervention_summary(self, total_corrected, m_before, m_after):
+        def r_str(v, t): return f"{v / t:.2%}" if t > 0 else "N/A"
 
-        if res_idx or res_type_idx:
-            print("─" * 195)
-            print(f"🔥 Residual Limbs (23-30) Summary:")
+        print("═" * 100)
+        print(f"🛡️ Post-Processing Intervention Report & Ablation Study")
+        print("─" * 100)
+        print(f"   - Anatomical Violations Corrected : {total_corrected} points")
+        print(
+            f"   - Global Acc BEFORE               : {r_str(m_before['global_correct'], m_before['global_total_valid'])}")
+        print(
+            f"   - Global Acc AFTER                : {r_str(m_after['global_correct'], m_after['global_total_valid'])}")
 
-            if res_idx:
-                res_avg_oks = np.sum(kpt_oks_sums[res_idx]) / np.sum(kpt_counts[res_idx])
+        # 计算差异
+        diff = m_after['global_correct'] - m_before['global_correct']
+        diff_str = f"+{diff}" if diff > 0 else str(diff)
+        print(f"   - Net Accuracy Gain               : {diff_str} correct points")
 
-                res_fail_sum = np.sum(kpt_fail_counts[res_idx])
-                res_total_sum = np.sum(kpt_counts[res_idx])
-                res_fail_norm_sum = np.sum(kpt_norm_fail_counts[res_idx])
-                res_norm_tot = np.sum(kpt_norm_reg_counts[res_idx])
-                res_fail_pros_sum = np.sum(kpt_pros_fail_counts[res_idx])
-                res_pros_tot = np.sum(kpt_pros_reg_counts[res_idx])
+        if not np.isnan(m_after['macro_auc']):
+            print(
+                f"   - Global Macro AUC (Probabilities): {m_after['macro_auc']:.4f} (Invariant to Post-Processing)")
+        print("═" * 100 + "\n")
 
-                print(f"   Total Avg OKS: {res_avg_oks:.4f}")
-                print(f"   Failure Rate : {get_rate_str(res_fail_sum, res_total_sum)}")
-                print(f"     - Fail Normal  : {get_rate_str(res_fail_norm_sum, res_norm_tot)}")
-                print(f"     - Fail Pros    : {get_rate_str(res_fail_pros_sum, res_pros_tot)}")
+    # =========================================================================
+    # 模块 5：W&B 推送
+    # =========================================================================
+    def _log_to_wandb(self, m_after, m_before, total_corrected):
+        import numpy as np
+        try:
+            import wandb
+            if wandb.run is not None and not np.isnan(m_after['macro_auc']):
+                # 推送对比数据
+                wandb_metrics = {
+                    "metrics/macro_auc": m_after['macro_auc'],
+                    "metrics/violations_corrected": total_corrected,
+                    "metrics/acc_BEFORE": m_before['global_correct'] / max(1, m_before['global_total_valid']),
+                    "metrics/acc_AFTER": m_after['global_correct'] / max(1, m_after['global_total_valid']),
+                }
 
-            if res_type_idx:
-                tot_correct = np.sum(kpt_type_correct_counts[res_type_idx])
-                tot_count = np.sum(kpt_type_counts[res_type_idx])
-                norm_correct = np.sum(kpt_normal_type_correct_counts[res_type_idx])
-                norm_count = np.sum(kpt_normal_type_counts[res_type_idx])
-                pros_correct = np.sum(kpt_pros_type_correct_counts[res_type_idx])
-                pros_count = np.sum(kpt_pros_type_counts[res_type_idx])
-                miss_correct = np.sum(kpt_missing_type_correct_counts[res_type_idx])
-                miss_count = np.sum(kpt_missing_type_counts[res_type_idx])
+                # 单点 AUC
+                for i, auc in enumerate(m_after['kpt_auc']):
+                    if not np.isnan(auc):
+                        name = self.dataset_meta['keypoint_id2name'].get(i, f"kp_{i}")
+                        wandb_metrics[f"AUC_per_kpt/{i}_{name}"] = auc
 
-                print(f"   Overall Type Acc : {get_rate_str(tot_correct, tot_count)}")
-                print(f"     - Normal Acc   : {get_rate_str(norm_correct, norm_count)}")
-                print(f"     - Pros Acc     : {get_rate_str(pros_correct, pros_count)}")
-                print(f"     - Missing Acc  : {get_rate_str(miss_correct, miss_count)}")
-
-        print("═" * 195 + "\n")
-
-        # ---------------------------------------------------------
-        # 🌟 终极报表：白名单核心区域 ROC 曲线与 W&B 推送
-        # ---------------------------------------------------------
-        if len(all_y_true) > 0:
-            try:
-                import wandb
-                from sklearn.metrics import roc_auc_score
-
-                y_true_np = np.array(all_y_true)
-                y_probs_np = np.array(all_y_probs)
-
-                limb_auc_score = roc_auc_score(
-                    y_true_np, y_probs_np,
-                    multi_class='ovr', average='macro'
+                # 画图 (基于 After 的概率)
+                wandb_metrics["Limbs_Residuals_ROC_Curve"] = wandb.plot.roc_curve(
+                    m_after['all_y_true'], m_after['all_y_probs'],
+                    labels=["Normal", "Prosthetic", "Missing"], classes_to_plot=[0, 1, 2]
                 )
-                print(f"📈 Limbs & Residuals Macro AUC (Target Keypoints Only): {limb_auc_score:.4f}")
-                print("═" * 195 + "\n")
-
-                if wandb.run is not None:
-                    # 推送全局指标
-                    wandb_metrics = {"metrics/limbs_residuals_macro_auc": limb_auc_score}
-
-                    # 只推送白名单核心点的单点 AUC 追踪
-                    for k in LIMB_AND_RES_KPTS:
-                        if not np.isnan(kpt_auc_scores[k]):
-                            name = self.dataset_meta['keypoint_id2name'].get(k, f"kp_{k}")
-                            wandb_metrics[f"AUC_per_kpt/{k}_{name}"] = kpt_auc_scores[k]
-
-                    # 生成并在 W&B 上绘制多分类 ROC 交互曲线
-                    wandb_metrics["Limbs_Residuals_ROC_Curve"] = wandb.plot.roc_curve(
-                        y_true_np, y_probs_np,
-                        labels=["Normal", "Prosthetic", "Missing"],
-                        classes_to_plot=[0, 1, 2]
-                    )
-
-                    wandb.log(wandb_metrics)
-
-            except ImportError:
-                print("⚠️ sklearn or wandb not installed. Skipping AUC calculation.")
-            except Exception as e:
-                print(f"⚠️ Cannot compute AUC: {e}")
+                wandb.log(wandb_metrics)
+        except Exception as e:
+            print(f"W&B Log Error: {e}")
+            pass

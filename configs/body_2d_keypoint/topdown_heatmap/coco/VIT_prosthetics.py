@@ -199,3 +199,19 @@ default_hooks = dict(
     checkpoint=dict(type='CheckpointHook', interval=5, max_keep_ckpts=-1),
     sampler_seed=dict(type='DistSamplerSeedHook'),
 )
+
+visualizer = dict(
+    type='PoseLocalVisualizer',
+    vis_backends=[
+        dict(type='LocalVisBackend'),  # 保留本地日志记录
+        dict(
+            type='WandbVisBackend',    # 🌟 开启 W&B 魔法
+            init_kwargs=dict(
+                project='prosthetics-pose-estimation',  # W&B 上的项目名称
+                name='ViT-prosthetics',         # 这次 Run 的名字
+                entity='qitianye1104'                    # (可选) 你的 W&B 账号名或团队名
+            )
+        )
+    ],
+    name='visualizer'
+)
