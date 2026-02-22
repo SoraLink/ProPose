@@ -101,18 +101,28 @@ class ProstheticsMetric(CocoMetric):
         return raw_metrics
 
     def report_custom_stats(self, results):
+        import numpy as np
+
         sigmas = self.dataset_meta['sigmas']
         num_kpts = len(sigmas)
 
         FAILURE_THR = 30.0
 
-        # 回归误差统计 (总体)
+        # 🌟 定义四肢与残肢白名单 (过滤掉面部、躯干等必定为 Normal 的“送分题”点)
+        # 根据标准 COCO + 扩充点，通常 7-10 是手臂，13-16 是腿，17-22 可能是手脚，23-30 是残肢
+        LIMB_AND_RES_KPTS = [
+            7, 8, 9, 10,  # 肘部、手腕
+            13, 14, 15, 16,  # 膝盖、脚踝
+            17, 18, 19, 20, 21, 22,  # 手、脚掌等扩充点
+            23, 24, 25, 26, 27, 28, 29, 30  # 残肢截断点
+        ]
+
+        # 回归误差统计 (总体 & 细分)
         kpt_oks_sums = np.zeros(num_kpts)
         kpt_epe_sums = np.zeros(num_kpts)
         kpt_counts = np.zeros(num_kpts)
         kpt_fail_counts = np.zeros(num_kpts)
 
-        # 回归误差统计 (细分 Type 0 和 Type 1)
         kpt_norm_reg_counts = np.zeros(num_kpts)
         kpt_norm_fail_counts = np.zeros(num_kpts)
         kpt_pros_reg_counts = np.zeros(num_kpts)
@@ -128,8 +138,13 @@ class ProstheticsMetric(CocoMetric):
         kpt_normal_type_counts = np.zeros(num_kpts)
         kpt_normal_type_correct_counts = np.zeros(num_kpts)
 
-        # 用于统计 GT Type 到 Pred Type 的混淆矩阵 (3x3)
         type_confusion_matrix = np.zeros((3, 3), dtype=int)
+
+        # 🌟 概率收集器：用于 W&B 画 ROC 曲线和计算 AUC
+        all_y_true = []  # 仅存放白名单内的核心点
+        all_y_probs = []
+        kpt_y_true = [[] for _ in range(num_kpts)]  # 存放 31 个每个点专属的真实标签
+        kpt_y_probs = [[] for _ in range(num_kpts)]  # 存放 31 个每个点专属的预测概率
 
         for res in results:
             instance = res[0]
@@ -141,10 +156,10 @@ class ProstheticsMetric(CocoMetric):
             if 'keypoint_types' in instance['gt_instances']:
                 gt_kpt_types = instance['gt_instances']['keypoint_types'][0]
                 pred_kpt_types = instance['pred_types'][0]
+                pred_type_scores = instance['type_scores'][0]
             else:
                 raise ValueError("Keypoint types are not available.")
 
-            # 获取 scale
             area = instance['areas'][0]
             if isinstance(area, (list, np.ndarray)): area = area[0]
             scale = np.sqrt(area)
@@ -154,8 +169,21 @@ class ProstheticsMetric(CocoMetric):
                 kpt_type = gt_kpt_types[k]
                 pred_type = pred_kpt_types[k]
 
-                # --- 1. Type 分类准确率统计 ---
+                # --- 1. Type 分类准确率统计与概率收集 ---
                 if v_g > 0:
+                    # 兼容 Tensor 或 Numpy
+                    prob_array = pred_type_scores[k].cpu().numpy() if hasattr(pred_type_scores[k], 'cpu') else \
+                    pred_type_scores[k]
+
+                    # 🌟 仅收集白名单核心点到全局池子
+                    if k in LIMB_AND_RES_KPTS:
+                        all_y_true.append(kpt_type)
+                        all_y_probs.append(prob_array)
+
+                    # 专属池子依然全部收集（后续计算会自动过滤无效点）
+                    kpt_y_true[k].append(kpt_type)
+                    kpt_y_probs[k].append(prob_array)
+
                     kpt_type_counts[k] += 1
                     if pred_type == kpt_type:
                         kpt_type_correct_counts[k] += 1
@@ -164,18 +192,16 @@ class ProstheticsMetric(CocoMetric):
                         kpt_normal_type_counts[k] += 1
                         if pred_type == 0:
                             kpt_normal_type_correct_counts[k] += 1
-
-                    if kpt_type == 1:
+                    elif kpt_type == 1:
                         kpt_pros_type_counts[k] += 1
                         if pred_type == 1:
                             kpt_pros_type_correct_counts[k] += 1
-
-                    if kpt_type == 2:
+                    elif kpt_type == 2:
                         kpt_missing_type_counts[k] += 1
                         if pred_type == 2:
                             kpt_missing_type_correct_counts[k] += 1
 
-                    # 记录混淆矩阵数据 (仅对 0-22 基础关键点)
+                    # 记录混淆矩阵数据 (仅对 0-22 基础人体关键点)
                     if k < 23:
                         if 0 <= kpt_type <= 2 and 0 <= pred_type <= 2:
                             type_confusion_matrix[kpt_type, pred_type] += 1
@@ -185,17 +211,15 @@ class ProstheticsMetric(CocoMetric):
                 if kpt_type == 2:
                     v_g = 0
 
-                if v_g > 0:  # 只统计 GT 存在的点 (Type 0 和 Type 1)
+                if v_g > 0:
                     x_g, y_g = gt_kpt[k][:2]
                     x_p, y_p = pred_kpts[k]
 
                     dist_sq = (x_p - x_g) ** 2 + (y_p - y_g) ** 2
                     dist = np.sqrt(dist_sq)
 
-                    # 计算 OKS
                     oks = np.exp(-dist_sq / (2 * (scale ** 2) * (sigmas[k] ** 2)))
 
-                    # 累加全局数据
                     kpt_oks_sums[k] += oks
                     kpt_epe_sums[k] += dist
                     kpt_counts[k] += 1
@@ -204,7 +228,6 @@ class ProstheticsMetric(CocoMetric):
                     if is_fail:
                         kpt_fail_counts[k] += 1
 
-                    # 细分回归数据到 Normal 和 Prosthetic
                     if kpt_type == 0:
                         kpt_norm_reg_counts[k] += 1
                         if is_fail:
@@ -214,36 +237,46 @@ class ProstheticsMetric(CocoMetric):
                         if is_fail:
                             kpt_pros_fail_counts[k] += 1
 
-        # 格式化输出函数
+        # 🌟 计算每个关键点的独立 AUC
+        kpt_auc_scores = np.full(num_kpts, np.nan)
+        try:
+            from sklearn.metrics import roc_auc_score
+            for i in range(num_kpts):
+                if len(kpt_y_true[i]) > 0:
+                    # 安全校验：必须有至少两个不同的类别，否则无法计算 AUC
+                    if len(np.unique(kpt_y_true[i])) > 1:
+                        kpt_auc_scores[i] = roc_auc_score(
+                            kpt_y_true[i], kpt_y_probs[i],
+                            multi_class='ovr', average='macro'
+                        )
+        except ImportError:
+            pass
+
         def get_rate_str(val, total):
             return f"{int(val)}/{int(total)} ({val / total:.1%})" if total > 0 else "N/A"
 
-        # 表格加宽到 185 以容纳新增列
-        print("\n" + "═" * 185)
+        # 打印加宽大表
+        print("\n" + "═" * 195)
         print(f"📉 Failure Threshold: > {FAILURE_THR} pixels")
-        print("─" * 185)
+        print("─" * 195)
 
-        header = f"{'ID':<4} | {'Keypoint Name':<22} | {'Avg OKS':<7} | {'Avg EPE':<7} | {'Fail All':<14} | {'Fail Norm':<14} | {'Fail Pros':<14} | {'All Acc':<18} | {'Norm Acc':<18} | {'Pros Acc':<18} | {'Miss Acc':<18}"
+        header = f"{'ID':<4} | {'Keypoint Name':<22} | {'Avg OKS':<7} | {'Avg EPE':<7} | {'Fail All':<14} | {'Fail Norm':<14} | {'Fail Pros':<14} | {'All Acc':<18} | {'Norm Acc':<18} | {'Pros Acc':<18} | {'Miss Acc':<18} | {'Macro AUC':<9}"
         print(header)
-        print("─" * 185)
+        print("─" * 195)
 
         for i in range(num_kpts):
             name = self.dataset_meta['keypoint_id2name'].get(i, f"kp_{i}")
 
-            # Type 分类 Accurate 字符串
             acc_all = get_rate_str(kpt_type_correct_counts[i], kpt_type_counts[i])
             acc_norm = get_rate_str(kpt_normal_type_correct_counts[i], kpt_normal_type_counts[i])
             acc_pros = get_rate_str(kpt_pros_type_correct_counts[i], kpt_pros_type_counts[i])
             acc_miss = get_rate_str(kpt_missing_type_correct_counts[i], kpt_missing_type_counts[i])
 
-            # 回归指标字符串
             if kpt_counts[i] > 0:
                 avg_oks = kpt_oks_sums[i] / kpt_counts[i]
                 avg_epe = kpt_epe_sums[i] / kpt_counts[i]
-
                 oks_str = f"{avg_oks:.4f}"
                 epe_str = f"{avg_epe:.2f}"
-
                 fail_all_str = get_rate_str(kpt_fail_counts[i], kpt_counts[i])
                 fail_norm_str = get_rate_str(kpt_norm_fail_counts[i], kpt_norm_reg_counts[i])
                 fail_pros_str = get_rate_str(kpt_pros_fail_counts[i], kpt_pros_reg_counts[i])
@@ -251,14 +284,15 @@ class ProstheticsMetric(CocoMetric):
                 oks_str, epe_str = "N/A", "N/A"
                 fail_all_str, fail_norm_str, fail_pros_str = "N/A", "N/A", "N/A"
 
-            # 打印单行
+            auc_str = f"{kpt_auc_scores[i]:.4f}" if not np.isnan(kpt_auc_scores[i]) else "N/A"
+
             print(
-                f"{i:<4} | {name:<22} | {oks_str:<7} | {epe_str:<7} | {fail_all_str:<14} | {fail_norm_str:<14} | {fail_pros_str:<14} | {acc_all:<18} | {acc_norm:<18} | {acc_pros:<18} | {acc_miss:<18}")
+                f"{i:<4} | {name:<22} | {oks_str:<7} | {epe_str:<7} | {fail_all_str:<14} | {fail_norm_str:<14} | {fail_pros_str:<14} | {acc_all:<18} | {acc_norm:<18} | {acc_pros:<18} | {acc_miss:<18} | {auc_str:<9}")
 
         # ---------------------------------------------------------
         # 全局 Type 混淆矩阵报表 (Excluded Residual Limbs 23-30)
         # ---------------------------------------------------------
-        print("─" * 185)
+        print("─" * 195)
         print("📊 Global Type Confusion Matrix (Excluded Residual Limbs 23-30, Row: GT, Col: Pred)")
         print(f"   {'':<14} | {'Pred Normal (0)':<20} | {'Pred Pros (1)':<20} | {'Pred Miss (2)':<20} | {'Total GT'}")
 
@@ -284,7 +318,7 @@ class ProstheticsMetric(CocoMetric):
         res_type_idx = [idx for idx in range(23, 31) if kpt_type_counts[idx] > 0]
 
         if res_idx or res_type_idx:
-            print("─" * 185)
+            print("─" * 195)
             print(f"🔥 Residual Limbs (23-30) Summary:")
 
             if res_idx:
@@ -317,4 +351,46 @@ class ProstheticsMetric(CocoMetric):
                 print(f"     - Pros Acc     : {get_rate_str(pros_correct, pros_count)}")
                 print(f"     - Missing Acc  : {get_rate_str(miss_correct, miss_count)}")
 
-        print("═" * 185 + "\n")
+        print("═" * 195 + "\n")
+
+        # ---------------------------------------------------------
+        # 🌟 终极报表：白名单核心区域 ROC 曲线与 W&B 推送
+        # ---------------------------------------------------------
+        if len(all_y_true) > 0:
+            try:
+                import wandb
+                from sklearn.metrics import roc_auc_score
+
+                y_true_np = np.array(all_y_true)
+                y_probs_np = np.array(all_y_probs)
+
+                limb_auc_score = roc_auc_score(
+                    y_true_np, y_probs_np,
+                    multi_class='ovr', average='macro'
+                )
+                print(f"📈 Limbs & Residuals Macro AUC (Target Keypoints Only): {limb_auc_score:.4f}")
+                print("═" * 195 + "\n")
+
+                if wandb.run is not None:
+                    # 推送全局指标
+                    wandb_metrics = {"metrics/limbs_residuals_macro_auc": limb_auc_score}
+
+                    # 只推送白名单核心点的单点 AUC 追踪
+                    for k in LIMB_AND_RES_KPTS:
+                        if not np.isnan(kpt_auc_scores[k]):
+                            name = self.dataset_meta['keypoint_id2name'].get(k, f"kp_{k}")
+                            wandb_metrics[f"AUC_per_kpt/{k}_{name}"] = kpt_auc_scores[k]
+
+                    # 生成并在 W&B 上绘制多分类 ROC 交互曲线
+                    wandb_metrics["Limbs_Residuals_ROC_Curve"] = wandb.plot.roc_curve(
+                        y_true_np, y_probs_np,
+                        labels=["Normal", "Prosthetic", "Missing"],
+                        classes_to_plot=[0, 1, 2]
+                    )
+
+                    wandb.log(wandb_metrics)
+
+            except ImportError:
+                print("⚠️ sklearn or wandb not installed. Skipping AUC calculation.")
+            except Exception as e:
+                print(f"⚠️ Cannot compute AUC: {e}")
