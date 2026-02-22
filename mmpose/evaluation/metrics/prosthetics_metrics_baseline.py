@@ -199,7 +199,7 @@ class ProstheticsMetric(CocoMetric):
         num_kpts = len(sigmas)
         FAILURE_THR = 30.0
 
-        # 🌟 白名单：分类准确率、AUC、混淆矩阵 只看这些区域
+        # 🌟 白名单
         LIMB_AND_RES_KPTS = [7, 8, 9, 10, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30]
 
         m = {
@@ -234,16 +234,12 @@ class ProstheticsMetric(CocoMetric):
             for k in range(num_kpts):
                 v_g, gt_t, pr_t = gt_v[k], gt_types[k], pred_types[k]
 
-                # -----------------------------------------------------------------
-                # 🌟 1. 分类统计 & 概率收集 (严格限制在四肢和残肢白名单内)
-                # -----------------------------------------------------------------
                 if k in LIMB_AND_RES_KPTS:
                     if v_g > 0:
                         m['global_total_valid'] += 1
                         if pr_t == gt_t: m['global_correct'] += 1
 
-                        prob_arr = type_scores[k].cpu().numpy() if hasattr(type_scores[k], 'cpu') else type_scores[
-                            k]
+                        prob_arr = type_scores[k].cpu().numpy() if hasattr(type_scores[k], 'cpu') else type_scores[k]
 
                         all_y_true.append(gt_t)
                         all_y_probs.append(prob_arr)
@@ -259,21 +255,16 @@ class ProstheticsMetric(CocoMetric):
                         elif gt_t == 2:
                             m['miss_counts'][k] += 1; m['miss_correct'][k] += (pr_t == 2)
 
-                        # 记录 23 以前的基础点混淆矩阵 (现在只包含基础点里的四肢)
                         if k < 23 and 0 <= gt_t <= 2 and 0 <= pr_t <= 2:
                             m['confusion'][gt_t, pr_t] += 1
 
-                # -----------------------------------------------------------------
-                # 🌟 2. 回归统计 (所有点都参与，展现模型的整体定位硬实力)
-                # -----------------------------------------------------------------
-                # Type 2 缺失点本质上不在图里，不参与距离回归计算
+                # 回归统计
                 if gt_t == 2: v_g = 0
                 if v_g > 0:
                     dist = np.sqrt((pred_kpts[k][0] - gt_kpt[k][0]) ** 2 + (pred_kpts[k][1] - gt_kpt[k][1]) ** 2)
                     oks = np.exp(-(dist ** 2) / (2 * (scale ** 2) * (sigmas[k] ** 2)))
-
-                    m['oks_sums'][k] += oks;
-                    m['epe_sums'][k] += dist;
+                    m['oks_sums'][k] += oks
+                    m['epe_sums'][k] += dist
                     m['counts'][k] += 1
                     is_fail = dist > FAILURE_THR
                     if is_fail: m['fail_counts'][k] += 1
@@ -282,7 +273,9 @@ class ProstheticsMetric(CocoMetric):
                     elif gt_t == 1:
                         m['pros_reg_counts'][k] += 1; m['pros_fail_counts'][k] += is_fail
 
-        # 计算 AUC
+        # ==========================================
+        # 🌟 核心修正：单点 AUC 动态降维计算
+        # ==========================================
         m['kpt_auc'] = np.full(num_kpts, np.nan)
         m['macro_auc'] = np.nan
         m['all_y_true'] = np.array(all_y_true)
@@ -291,14 +284,29 @@ class ProstheticsMetric(CocoMetric):
         try:
             from sklearn.metrics import roc_auc_score
             for i in range(num_kpts):
-                if len(kpt_y_true[i]) > 0 and len(np.unique(kpt_y_true[i])) > 1:
-                    m['kpt_auc'][i] = roc_auc_score(kpt_y_true[i], kpt_y_probs[i], multi_class='ovr',
-                                                    average='macro')
-            if len(all_y_true) > 0:
-                m['macro_auc'] = roc_auc_score(m['all_y_true'], m['all_y_probs'], multi_class='ovr',
-                                               average='macro')
-        except:
-            pass
+                y_t = np.array(kpt_y_true[i])
+                y_p = np.array(kpt_y_probs[i])
+
+                if len(y_t) > 0:
+                    present_classes = np.unique(y_t)
+                    if len(present_classes) > 1:
+                        # 截取存在的类别列
+                        filtered_probs = y_p[:, present_classes]
+                        if len(present_classes) == 2:
+                            # 二分类需重新归一化
+                            filtered_probs = filtered_probs / filtered_probs.sum(axis=1, keepdims=True)
+                            m['kpt_auc'][i] = roc_auc_score(y_t, filtered_probs[:, 1])
+                        else:
+                            # 三分类 OvR
+                            m['kpt_auc'][i] = roc_auc_score(y_t, filtered_probs, multi_class='ovr', average='macro')
+
+            if len(m['all_y_true']) > 0 and len(np.unique(m['all_y_true'])) > 1:
+                m['macro_auc'] = roc_auc_score(m['all_y_true'], m['all_y_probs'], multi_class='ovr', average='macro')
+
+        except Exception as e:
+            import traceback
+            print(f"🔥 AUC 计算失败: {e}")
+            traceback.print_exc()
 
         return m
 
@@ -396,27 +404,58 @@ class ProstheticsMetric(CocoMetric):
         import numpy as np
         try:
             import wandb
-            if wandb.run is not None and not np.isnan(m_after['macro_auc']):
-                # 推送对比数据
-                wandb_metrics = {
-                    "metrics/macro_auc": m_after['macro_auc'],
-                    "metrics/violations_corrected": total_corrected,
-                    "metrics/acc_BEFORE": m_before['global_correct'] / max(1, m_before['global_total_valid']),
-                    "metrics/acc_AFTER": m_after['global_correct'] / max(1, m_after['global_total_valid']),
-                }
+            if wandb.run is None:
+                return
 
-                # 单点 AUC
-                for i, auc in enumerate(m_after['kpt_auc']):
-                    if not np.isnan(auc):
-                        name = self.dataset_meta['keypoint_id2name'].get(i, f"kp_{i}")
-                        wandb_metrics[f"AUC_per_kpt/{i}_{name}"] = auc
+            all_y_true = m_after['all_y_true']
+            all_y_probs = m_after['all_y_probs']
 
-                # 画图 (基于 After 的概率)
-                wandb_metrics["Limbs_Residuals_ROC_Curve"] = wandb.plot.roc_curve(
-                    m_after['all_y_true'], m_after['all_y_probs'],
-                    labels=["Normal", "Prosthetic", "Missing"], classes_to_plot=[0, 1, 2]
-                )
-                wandb.log(wandb_metrics)
+            wandb_metrics = {
+                "metrics/macro_auc": m_after['macro_auc'],
+                "metrics/violations_corrected": total_corrected,
+                "metrics/acc_BEFORE": m_before['global_correct'] / max(1, m_before['global_total_valid']),
+                "metrics/acc_AFTER": m_after['global_correct'] / max(1, m_after['global_total_valid']),
+            }
+
+            # ==========================================
+            # 🌟 强制平衡采样：揭开 20 万 Normal 掩盖的真相
+            # ==========================================
+            if len(all_y_true) > 0:
+                idx_0 = np.where(all_y_true == 0)[0]
+                idx_1 = np.where(all_y_true == 1)[0]
+                idx_2 = np.where(all_y_true == 2)[0]
+
+                # 为了不被 WandB 随机抹掉少数类，强制每类最多抽取 3333 个点
+                # 如果某类不足 3333（极少情况），就全拿
+                s_limit = 3333
+                s_0 = np.random.choice(idx_0, min(s_limit, len(idx_0)), replace=False) if len(idx_0) > 0 else []
+                s_1 = np.random.choice(idx_1, min(s_limit, len(idx_1)), replace=False) if len(idx_1) > 0 else []
+                s_2 = np.random.choice(idx_2, min(s_limit, len(idx_2)), replace=False) if len(idx_2) > 0 else []
+
+                balanced_idx = np.concatenate([s_0, s_1, s_2]).astype(int)
+                np.random.shuffle(balanced_idx)
+
+                bal_y_true = all_y_true[balanced_idx]
+                bal_y_probs = all_y_probs[balanced_idx]
+
+                if len(np.unique(bal_y_true)) > 1:
+                    # 记录真实平衡后的图表
+                    wandb_metrics["Global_Balanced_ROC"] = wandb.plot.roc_curve(
+                        bal_y_true, bal_y_probs, labels=["Normal", "Prosthetic", "Missing"]
+                    )
+                    wandb_metrics["Global_Balanced_PR"] = wandb.plot.pr_curve(
+                        bal_y_true, bal_y_probs, labels=["Normal", "Prosthetic", "Missing"]
+                    )
+
+            # 🌟 把每个关节点的 AUC 变成折线图推上去 (干净、清晰、免卡顿)
+            for i, auc_val in enumerate(m_after['kpt_auc']):
+                if not np.isnan(auc_val):
+                    name = self.dataset_meta['keypoint_id2name'].get(i, f"kp_{i}")
+                    wandb_metrics[f"AUC_per_kpt/{name}"] = auc_val
+
+            wandb.log(wandb_metrics)
+
         except Exception as e:
-            print(f"W&B Log Error: {e}")
-            pass
+            import traceback
+            print(f"🔥 Wandb Log 报错: {e}")
+            traceback.print_exc()
