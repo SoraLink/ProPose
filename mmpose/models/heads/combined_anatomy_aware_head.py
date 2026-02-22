@@ -30,12 +30,12 @@ class CombinedAnatomyAwareHead(HeatmapHead):
         self.omega_dict = {
             23: [7, 9, 17, 25],
             24: [8, 10, 18, 26],
-            25: [9, 17],
-            26: [10, 18],
+            25: [9, 17, 23],
+            26: [10, 18, 24],
             27: [13, 15, 19, 21, 29],
             28: [14, 16, 20, 22, 30],
-            29: [15, 19, 21],
-            30: [16, 20, 22],
+            29: [15, 19, 21, 27],
+            30: [16, 20, 22, 28],
         }
 
     def forward(self, feats, with_type=False):
@@ -107,8 +107,8 @@ class CombinedAnatomyAwareHead(HeatmapHead):
         losses['loss_kpt'] = loss_kpt
 
         # BioContrastive Loss
-        type_probs = torch.softmax(pred_type_logits, dim=-1)  # [B*K, 3] 变 [B, K, 3]
-        p_bio = type_probs[:, :, 0]  # [B, K] 提取绝对在 0~1 之间的正常肉体概率
+        type_probs = torch.softmax(pred_type_logits, dim=-1)
+        p_bio = type_probs[:, :, 0]
 
         loss_bio_total = 0.0
         valid_r_count = 0.0
