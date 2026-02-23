@@ -16,7 +16,7 @@ randomness = dict(seed=42, deterministic=False)
 custom_imports = dict(
     imports=[
         'mmpose.evaluation.metrics.prosthetics_metrics_baseline',
-        'mmpose.models.heads.combined_anatomy_aware_head',
+        'mmpose.models.heads.class_balanced_anatomy_aware_head',
         'mmpose.datasets.datasets.custom.ld_pros_dataset',
     ],
     allow_failed_imports=False
@@ -88,7 +88,7 @@ model = dict(
                        'v1/pretrained_models/mae_pretrain_vit_large_20230913.pth'),
     ),
     head=dict(
-        type='CombinedAnatomyAwareHead',
+        type='ClassBalancedAnatomyAwareHead',
         in_channels=1024,
         out_channels=31,
         deconv_out_channels=(256, 256),
@@ -98,9 +98,7 @@ model = dict(
             use_target_weight=True
         ),
         decoder=codec,
-        type_loss_weight=0.003,
-        tau=0.2,
-        bio_loss_weight=0.001,
+        type_loss_weight=0.004,
     ),
     test_cfg=dict(
         flip_mode='heatmap',
@@ -210,7 +208,7 @@ visualizer = dict(
             type='WandbVisBackend',    # 🌟 开启 W&B 魔法
             init_kwargs=dict(
                 project='prosthetics-pose-estimation',  # W&B 上的项目名称
-                name='ViT-L-prosthetics_combined_loss',         # 这次 Run 的名字
+                name='ViT-L-prosthetics_CB_loss',         # 这次 Run 的名字
                 entity='qitianye1104'                    # (可选) 你的 W&B 账号名或团队名
             )
         )
