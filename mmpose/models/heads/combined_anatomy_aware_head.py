@@ -15,7 +15,7 @@ class CombinedAnatomyAwareHead(HeatmapHead):
                  type_loss_weight=1.0,
                  tau=1.0,
                  bio_loss_weight=1.0,
-                 detach_type_head=True,
+                 detach_type_head=False,
                  **kwargs):
         super().__init__(**kwargs)
 
