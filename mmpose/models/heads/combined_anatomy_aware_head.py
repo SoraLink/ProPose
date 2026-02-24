@@ -1,6 +1,7 @@
 # mmpose/models/heads/anatomy_aware_head.py
 import torch
 import torch.nn as nn
+from torchvision.models.resnet import BasicBlock
 
 from mmpose.evaluation import pose_pck_accuracy
 from mmpose.registry import MODELS
@@ -14,15 +15,18 @@ class CombinedAnatomyAwareHead(HeatmapHead):
                  type_loss_weight=1.0,
                  tau=1.0,
                  bio_loss_weight=1.0,
+                 detach_type_head=True,
                  **kwargs):
         super().__init__(**kwargs)
 
         self.type_head = nn.Sequential(
+            BasicBlock(inplanes=self.in_channels, planes=self.in_channels),
             nn.AdaptiveAvgPool2d(1),  # Global Pool: [B, C, H, W] -> [B, C, 1, 1]
             nn.Flatten(),  # [B, C]
             nn.Linear(self.in_channels, self.out_channels * 3)  # [B, K*3]
         )
 
+        self.detach_type_head = detach_type_head
         self.tau = tau
         self.type_loss_weight = type_loss_weight
         self.bio_loss_weight = bio_loss_weight
@@ -48,7 +52,8 @@ class CombinedAnatomyAwareHead(HeatmapHead):
         if not with_type:
             return heatmaps
 
-        type_logits = self.type_head(x)
+        type_feat = x.detach() if self.detach_type_head else x
+        type_logits = self.type_head(type_feat)
         type_logits = type_logits.view(-1, self.out_channels, 3)  # [B, K, 3]
 
         return heatmaps, type_logits

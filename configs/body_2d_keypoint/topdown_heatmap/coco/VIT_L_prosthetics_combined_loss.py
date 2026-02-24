@@ -210,7 +210,7 @@ visualizer = dict(
             type='WandbVisBackend',    # 🌟 开启 W&B 魔法
             init_kwargs=dict(
                 project='prosthetics-pose-estimation',  # W&B 上的项目名称
-                name='ViT-L-prosthetics_combined_loss',         # 这次 Run 的名字
+                name='ViT-L-prosthetics_combined_loss_resnet_block',         # 这次 Run 的名字
                 entity='qitianye1104'                    # (可选) 你的 W&B 账号名或团队名
             )
         )
