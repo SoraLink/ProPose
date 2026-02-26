@@ -98,8 +98,8 @@ model = dict(
             use_target_weight=True
         ),
         decoder=codec,
-        type_loss_weight=0.003,
-        tau=0.15,
+        type_loss_weight=0.001,
+        tau=0.2,
         bio_loss_weight=0.0003,
     ),
     test_cfg=dict(
@@ -210,7 +210,7 @@ visualizer = dict(
             type='WandbVisBackend',    # 🌟 开启 W&B 魔法
             init_kwargs=dict(
                 project='prosthetics-pose-estimation',  # W&B 上的项目名称
-                name='ViT-L-prosthetics_combined_loss_resnet_block',         # 这次 Run 的名字
+                name='ViT-L-prosthetics_combined_loss',         # 这次 Run 的名字
                 entity='qitianye1104'                    # (可选) 你的 W&B 账号名或团队名
             )
         )
