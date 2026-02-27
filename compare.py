@@ -37,8 +37,21 @@ my_sigmas = np.array([
 
 
 # =========================================================
-# 3. 可视化和画图逻辑 (双重绝对过滤版)
+# 3. 可视化和画图逻辑 (双重绝对过滤 + Bbox版)
 # =========================================================
+def draw_bbox(img, bbox, color, thickness=2):
+    """画 Bounding Box 的辅助函数 (适配 MMPose pkl 的 x1, y1, x2, y2 格式)"""
+    if bbox is None or len(bbox) < 4:
+        return img
+
+    x1, y1, x2, y2 = bbox[:4]
+    pt1 = (int(x1), int(y1))
+    pt2 = (int(x2), int(y2)) # 直接使用 x2, y2，不再加上宽高
+
+    cv2.rectangle(img, pt1, pt2, color, thickness)
+    return img
+
+
 def draw_pose(img, kpts, color, types, valid_mask, radius=5):
     """严格过滤 Missing 和 vis=0 的点"""
     for i, (x, y) in enumerate(kpts):
@@ -117,11 +130,21 @@ def visualize_by_oks(pkl_a, pkl_b, sigmas, data_root, output_dir='oks_vis_result
             pred_types_b_all = item_b['pred_instances'].get('keypoint_types', [np.zeros(31)] * num_instances)
             pred_types_b = pred_types_b_all[n] if len(pred_types_b_all) > n else np.zeros(31)
 
-            if 'bboxes' in item_a['gt_instances']:
-                area = np.prod(item_a['gt_instances']['bboxes'][n][2:4])
+            # --- 获取 BBox 和计算 Area ---
+            gt_bbox = None
+            if 'bboxes' in item_a['gt_instances'] and len(item_a['gt_instances']['bboxes']) > n:
+                gt_bbox = item_a['gt_instances']['bboxes'][n]
+                # 按照 x1, y1, x2, y2 格式正确计算面积：(x2 - x1) * (y2 - y1)
+                area = (gt_bbox[2] - gt_bbox[0]) * (gt_bbox[3] - gt_bbox[1])
             else:
                 area = (np.max(gt[valid, 0]) - np.min(gt[valid, 0])) * (np.max(gt[valid, 1]) - np.min(gt[valid, 1]))
             area = max(area, 1.0)
+
+            # 安全提取预测的 bbox
+            pred_a_bbox = item_a['pred_instances']['bboxes'][n] if 'bboxes' in item_a['pred_instances'] and len(
+                item_a['pred_instances']['bboxes']) > n else None
+            pred_b_bbox = item_b['pred_instances']['bboxes'][n] if 'bboxes' in item_b['pred_instances'] and len(
+                item_b['pred_instances']['bboxes']) > n else None
 
             eval_valid = valid.copy()
             eval_valid[gt_types == 2] = False
@@ -133,10 +156,21 @@ def visualize_by_oks(pkl_a, pkl_b, sigmas, data_root, output_dir='oks_vis_result
             if abs(diff) < threshold: continue
 
             img = cv2.imread(img_path)
-            # 🌟 统一把 valid (即 visibility) 传给三个画图函数，实施绝对拦截
-            img_gt = draw_pose(img.copy(), gt, (255, 255, 255), types=gt_types, valid_mask=valid)
-            img_a = draw_pose(img.copy(), pred_a, (0, 0, 255), types=gt_types, valid_mask=valid)
-            img_b = draw_pose(img.copy(), pred_b, (0, 255, 0), types=gt_types, valid_mask=valid)
+
+            # 🌟 画 GT：先画框，再画点
+            img_gt = img.copy()
+            img_gt = draw_bbox(img_gt, gt_bbox, (255, 255, 255))
+            img_gt = draw_pose(img_gt, gt, (255, 255, 255), types=gt_types, valid_mask=valid)
+
+            # 🌟 画 Baseline Pred_A：先画框，再画点
+            img_a = img.copy()
+            img_a = draw_bbox(img_a, pred_a_bbox, (0, 0, 255))
+            img_a = draw_pose(img_a, pred_a, (0, 0, 255), types=gt_types, valid_mask=valid)
+
+            # 🌟 画 Finetune Pred_B：先画框，再画点
+            img_b = img.copy()
+            img_b = draw_bbox(img_b, pred_b_bbox, (0, 255, 0))
+            img_b = draw_pose(img_b, pred_b, (0, 255, 0), types=gt_types, valid_mask=valid)
 
             combined = np.hstack([img_gt, img_a, img_b])
 

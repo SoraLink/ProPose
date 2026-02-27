@@ -12,6 +12,7 @@ from mmpose.utils.tensor_utils import to_numpy
 class ClassBalancedAnatomyAwareHead(HeatmapHead):
     def __init__(self,
                  type_loss_weight=1.0,
+                 detach_type_head=False,
                  **kwargs):
         super().__init__(**kwargs)
 
@@ -21,6 +22,7 @@ class ClassBalancedAnatomyAwareHead(HeatmapHead):
             nn.Linear(self.in_channels, self.out_channels * 3)  # [B, K*3]
         )
 
+        self.detach_type_head = detach_type_head
         self.type_loss_weight = type_loss_weight
         self.ce_loss = nn.CrossEntropyLoss(reduction='none')
 
@@ -34,7 +36,8 @@ class ClassBalancedAnatomyAwareHead(HeatmapHead):
         if not with_type:
             return heatmaps
 
-        type_logits = self.type_head(x)
+        type_feat = x.detach() if self.detach_type_head else x
+        type_logits = self.type_head(type_feat)
         type_logits = type_logits.view(-1, self.out_channels, 3)  # [B, K, 3]
 
         return heatmaps, type_logits

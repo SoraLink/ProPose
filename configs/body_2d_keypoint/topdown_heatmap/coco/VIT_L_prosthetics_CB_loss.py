@@ -99,6 +99,7 @@ model = dict(
         ),
         decoder=codec,
         type_loss_weight=0.001,
+        detach_type_head=False,
     ),
     test_cfg=dict(
         flip_mode='heatmap',
