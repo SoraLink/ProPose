@@ -176,13 +176,20 @@ class CombinedRTMAnatomyAwareHead(RTMCCHead):
         return losses
 
     def predict(self, feats, batch_data_samples, test_cfg=None):
-
-        (pred_x, pred_y), pred_type_logits = self.forward(feats, with_type=True)
-
         preds = super().predict(feats, batch_data_samples, test_cfg)
 
-        type_probs = torch.softmax(pred_type_logits, dim=2)  # [B, K, 3]
-        pred_types = torch.argmax(type_probs, dim=2)  # [B, K]
+        if isinstance(feats, (list, tuple)) and isinstance(feats[0], (list, tuple)):
+            orig_feats = feats[0]
+        else:
+            orig_feats = feats
+
+        with torch.no_grad():
+            x = orig_feats[-1]
+            type_logits = self.type_head(x)
+            type_logits = type_logits.view(-1, self.out_channels, 3)  # [B, K, 3]
+
+            type_probs = torch.softmax(type_logits, dim=2)
+            pred_types = torch.argmax(type_probs, dim=2)
 
         for i, pred in enumerate(preds):
             pred.keypoint_types = pred_types[i][None]
