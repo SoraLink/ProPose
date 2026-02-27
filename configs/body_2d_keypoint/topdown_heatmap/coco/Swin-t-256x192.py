@@ -83,9 +83,10 @@ model = dict(
             'download/v1.0.0/swin_tiny_patch4_window7_224.pth'),
     ),
     head=dict(
-        type='HeatmapHead',
+        type='ClassBalancedAnatomyAwareHead',
         in_channels=768,
         out_channels=31,
+        type_loss_weight=0.001,
         loss=dict(type='KeypointMSELoss', use_target_weight=True),
         decoder=codec),
     test_cfg=dict(
