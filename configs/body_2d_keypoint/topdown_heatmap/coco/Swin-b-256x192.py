@@ -79,6 +79,7 @@ model = dict(
         type='ClassBalancedAnatomyAwareHead',
         in_channels=1024,
         out_channels=31,
+        type_loss_weight=0.001,
         loss=dict(type='KeypointMSELoss', use_target_weight=True),
         decoder=codec),
     test_cfg=dict(

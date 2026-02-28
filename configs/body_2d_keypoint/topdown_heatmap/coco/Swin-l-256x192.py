@@ -22,20 +22,10 @@ custom_imports = dict(
 train_cfg = dict(max_epochs=50, val_interval=10)
 
 # optimizer
-optim_wrapper = dict(
-    optimizer=dict(
-        type='AdamW',
-        lr=5e-4,
-        betas=(0.9, 0.999),
-        weight_decay=0.01,
-    ),
-    paramwise_cfg=dict(
-        custom_keys={
-            'absolute_pos_embed': dict(decay_mult=0.),
-            'relative_position_bias_table': dict(decay_mult=0.),
-            'norm': dict(decay_mult=0.)
-        }))
-
+optim_wrapper = dict(optimizer=dict(
+    type='Adam',
+    lr=5e-4,
+))
 # learning policy
 param_scheduler = [
     dict(type='LinearLR', begin=0, end=500, start_factor=0.001, by_epoch=False),
