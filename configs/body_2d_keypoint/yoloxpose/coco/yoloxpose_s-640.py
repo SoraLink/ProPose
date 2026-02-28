@@ -5,7 +5,7 @@ _base_ = '../../../_base_/default_runtime.py'
 # ==============================================================================
 # 1. 基础路径与自定义模块导入
 # ==============================================================================
-DATASET_TYPE = 'LDProsDataset'
+DATASET_TYPE = 'LDProsYoloDataset'
 DATA_ROOT = '/home/sora/workspace/dataset/pros_final'
 DATA_MODE = 'bottomup'  # 🌟 YOLO 是 Bottom-up，这里必须改！
 
@@ -85,8 +85,10 @@ train_pipeline_stage2 = [
 val_pipeline = [
     dict(type='LoadImage', imdecode_backend='pillow'),
     dict(type='BottomupResize', input_size=input_size, pad_val=(114, 114, 114)),
-    dict(type='PackPoseInputs',
-         meta_keys=('id', 'img_id', 'img_path', 'ori_shape', 'img_shape', 'input_size', 'input_center', 'input_scale'))
+    dict(
+        type='PackPoseInputs',
+        meta_keys=('id', 'img_id', 'img_path', 'ori_shape', 'img_shape',
+                   'input_size', 'input_center', 'input_scale'))
 ]
 
 # ==============================================================================
@@ -102,6 +104,7 @@ train_dataloader = dict(
         type=DATASET_TYPE,
         data_root=DATA_ROOT,
         data_mode=DATA_MODE,
+        serialize_data=False,
         filter_cfg=dict(filter_empty_gt=False, min_size=32),
         ann_file=TRAIN_ANN,
         data_prefix=dict(img='train_final/images/'),
@@ -119,6 +122,7 @@ val_dataloader = dict(
         type=DATASET_TYPE,
         data_root=DATA_ROOT,
         data_mode=DATA_MODE,
+        serialize_data=False,
         ann_file=VAL_ANN,
         data_prefix=dict(img='test_final/images/'),
         test_mode=True,

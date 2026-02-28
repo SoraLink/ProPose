@@ -179,6 +179,8 @@ class PackPoseInputs(BaseTransform):
         gt_instances = InstanceData()
         _instance_mapping_table = results.get('instance_mapping_table',
                                               self.instance_mapping_table)
+        if isinstance(_instance_mapping_table, list):
+            _instance_mapping_table = _instance_mapping_table[0]
         for key, packed_key in _instance_mapping_table.items():
             if key in results:
                 gt_instances.set_field(results[key], packed_key)

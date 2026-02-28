@@ -57,17 +57,57 @@ class ProstheticsBottomUpMetric(CocoMetric):
                 type_probs = data_sample['pred_instances']['type_scores']
             else:
                 raise ValueError('Keypoint types are not available in the prediction results.')
+            gt_instances = data_sample['gt_instances']
 
-            gt_type = data_sample['gt_instances']['keypoint_types']
-            types = np.array(gt_type, dtype=np.int64)
-            _, absent_indices = np.where(types == 2)
+            # 1. 检查是否存在 keypoints_visible 字段
+            if 'keypoints_visible' in gt_instances:
+                raw_vis = gt_instances['keypoints_visible']
+
+                # 兼容 Tensor 和 Numpy
+                if hasattr(raw_vis, 'cpu'):
+                    raw_vis = raw_vis.cpu().numpy()
+
+                # 解码 Type
+                gt_type = (raw_vis // 10).astype(int)
+
+            else:
+                # 🛡️ 触发防御机制：这是一张没有 GT 的图片 (Negative Sample)
+                # 我们创建一个空的数组，防止报错
+                # 尝试根据 bboxes 的长度来推断 (通常也是 0)
+                if 'bboxes' in gt_instances:
+                    num_instances = len(gt_instances['bboxes'])
+                else:
+                    num_instances = 0
+
+                # 默认所有 Type 为 0 (Normal)，或者干脆是空的
+                # 31 是你的关键点数量，请确保跟配置一致
+                gt_type = np.zeros((num_instances, 31), dtype=int)
+            # =================================================================
+
+            # 2. 转换为 numpy 以便后续寻找 absent indices
+            # (这里要做个类型安全检查，防止 gt_type 还是 Tensor)
+            if hasattr(gt_type, 'cpu'):
+                types_np = gt_type.cpu().numpy()
+            else:
+                types_np = np.array(gt_type)
+
+            _, absent_indices = np.where(types_np == 2)
+            # raw_vis = gt_instances['keypoints_visible']
+            # gt_type = (raw_vis // 10).astype(int)
+
+            # 1. 安全读取 GT BBoxes
+            if 'bboxes' in data_sample['gt_instances']:
+                gt_bboxes = data_sample['gt_instances']['bboxes']
+            else:
+                # 如果没有 bbox，给一个空的 numpy 数组 (0, 4)
+                gt_bboxes = np.zeros((0, 4), dtype=np.float32)
 
             target_result[0]['pred_types'] = pred_type
             target_result[0]['gt_types'] = gt_type
             target_result[0]['gt_instances'] = data_sample['gt_instances']
             target_result[0]['type_scores'] = type_probs
             target_result[0]['pred_bboxes'] = data_sample['pred_instances']['bboxes']
-            target_result[0]['gt_bboxes'] = data_sample['gt_instances']['bboxes']
+            target_result[0]['gt_bboxes'] = gt_bboxes
 
     def _match_instances(self, results):
         """将预测实例与 GT 实例进行 IoU 匹配，返回扁平化的合法配对列表"""

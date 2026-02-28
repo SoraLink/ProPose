@@ -10,7 +10,7 @@ from mmpose.datasets import CocoDataset
 
 
 @DATASETS.register_module()
-class LDProsDataset(CocoDataset):
+class LDProsYoloDataset(CocoDataset):
     """
     Custom Dataset for Amputee Pose Estimation (25 Keypoints).
     Based on user provided schema: "person_prosthesis_merged"
