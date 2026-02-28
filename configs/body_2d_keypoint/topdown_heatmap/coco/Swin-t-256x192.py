@@ -30,16 +30,8 @@ optim_wrapper = dict(optimizer=dict(
 
 # learning policy
 param_scheduler = [
-    dict(
-        type='LinearLR', begin=0, end=500, start_factor=0.001,
-        by_epoch=False),  # warm-up
-    dict(
-        type='MultiStepLR',
-        begin=0,
-        end=210,
-        milestones=[170, 200],
-        gamma=0.1,
-        by_epoch=True)
+    dict(type='LinearLR', begin=0, end=500, start_factor=0.001, by_epoch=False),
+    dict(type='CosineAnnealingLR', T_max=50, by_epoch=True)
 ]
 
 # automatically scaling LR based on the actual training batch size
