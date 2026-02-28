@@ -209,47 +209,36 @@ class LDProsDataset(CocoDataset):
                 self.W_reg_table[k, 1] = 0.0
 
         self.global_type_weights = torch.from_numpy(self.W_type_table).float()
-        print(self.global_type_weights)
-        print(self.W_reg_table)
         print(f"[{self.__class__.__name__}] Weights Calculation Completed.")
-
 
     def parse_data_info(self, raw_data_info):
         """
-        读取 JSON 中的 keypoint_types 并存入 data_info
+        读取 JSON 中的 keypoint_types 并将其编码进 keypoints_visible 中，
+        以此绕过 Mosaic 等数据增强机制对自定义字典键的清理限制。
         """
         data_info = super().parse_data_info(raw_data_info)
 
         # 获取 raw_ann_info (MMPose v1.x 标准结构)
         ann_info = raw_data_info.get('raw_ann_info', {})
 
-        num_kpts = self.METAINFO['num_keypoints']
-
-        # 假设 JSON 里有一个 key 叫 "keypoint_types"
+        # 获取分类 Type
         if 'keypoint_types' in ann_info:
             types = np.array(ann_info['keypoint_types'], dtype=np.int64)
-            data_info['keypoint_types'] = torch.from_numpy(types[None, :])
         else:
-            # 默认填充 0 (假设 0 代表正常点，非0代表特殊点)
             raise ValueError('keypoint_types not found in raw_ann_info')
 
-        instance_reg_weight = np.ones((1, num_kpts, 1), dtype=np.float32)
+        # 获取当前人的关键点可视度，通常形状是 [1, 31]，取 [0] 变成 [31]
+        vis = data_info['keypoints_visible'][0]
 
-        if hasattr(self, 'W_reg_table'):
-            for k in range(num_kpts):
-                t = types[k]
-                # Type 为 0 或 1 时查表，Type 为 2 (Missing) 时权重直接置 0
-                if t == 0 or t == 1:
-                    instance_reg_weight[0, k, 0] = self.W_reg_table[k, t]
-                elif t == 2:
-                    instance_reg_weight[0, k, 0] = 0.0
+        # 🌟🌟🌟 核心魔术：穿马甲 (仅对原本可视度 > 0 的点进行编码) 🌟🌟🌟
+        # 公式: vis_encoded = vis + type * 10
+        vis_encoded = np.where(vis > 0, vis + types * 10, 0)
 
-        data_info['custom_reg_weights'] = instance_reg_weight
+        # 将编码后的值覆盖回去
+        data_info['keypoints_visible'][0] = vis_encoded
 
-        # 如果你想把分类矩阵也丢进去（虽然通常分类 Loss 是全局固定的，传给 Loss 模块即可，但也放进数据流备用）
-
-        data_info['global_type_weights'] = self.global_type_weights[None, :, :]
-
+        # 🌟 保持极度干净：把之前 custom_weights 的打包代码全删了！
+        # 只要标准的键，系统就不会在拼接图片时崩溃
         data_info['instance_mapping_table'] = dict(
             bbox='bboxes',
             bbox_score='bbox_scores',
@@ -258,9 +247,6 @@ class LDProsDataset(CocoDataset):
             keypoints_visible='keypoints_visible',
             bbox_scale='bbox_scales',
             head_size='head_size',
-            keypoint_types='keypoint_types',
-            custom_reg_weights='custom_reg_weights',
-            global_type_weights='global_type_weights',
         )
 
         return data_info

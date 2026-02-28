@@ -81,7 +81,7 @@ model = dict(
         init_cfg=dict(
             type='Pretrained',
             checkpoint='https://github.com/SwinTransformer/storage/releases/'
-            'download/v1.0.0/swin_base_patch4_window12_384_22k.pth'),
+            'download/v1.0.0/swin_large_patch4_window12_384_22k.pth'),
     ),
     head=dict(
         type='ClassBalancedAnatomyAwareHead',
