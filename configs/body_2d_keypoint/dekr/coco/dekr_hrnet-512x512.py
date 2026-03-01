@@ -2,7 +2,7 @@ import os
 
 _base_ = ['../../../_base_/default_runtime.py']
 
-DATASET_TYPE = 'LDProsYoloDataset'
+DATASET_TYPE = 'LDProsDataset'
 DATA_ROOT = '/home/sora/workspace/dataset/pros_final'
 DATA_MODE = 'bottomup'  # 🌟 YOLO 是 Bottom-up，这里必须改！
 
@@ -15,14 +15,14 @@ custom_imports = dict(
     imports=[
         'mmpose.evaluation.metrics.prosthetics_dekr_metrics_baseline',  # 你的 Metric 路径 (请确保文件名一致)
         'mmpose.models.heads.combined_dekr_anatomy_aware_head',  # 🌟 我们刚刚写的 YOLOX Head 路径
-        'mmpose.datasets.datasets.custom.ld_pros_yolo_dataset',  # 你的数据集路径
+        'mmpose.datasets.datasets.custom.ld_pros_dataset',  # 你的数据集路径
     ],
     allow_failed_imports=False
 )
 
 
 # runtime
-train_cfg = dict(max_epochs=140, val_interval=1)
+train_cfg = dict(max_epochs=140, val_interval=20)
 
 # optimizer
 optim_wrapper = dict(optimizer=dict(
@@ -119,7 +119,7 @@ model = dict(
         type_loss_weight=0.0005,
         tau=0.2,
         bio_loss_weight=0.0003,
-        with_contrastive=False,
+        with_contrastive=True,
         decoder=codec,
     ),
     test_cfg=dict(
@@ -140,7 +140,7 @@ data_mode = 'bottomup'
 train_pipeline = [
     dict(type='LoadImage', imdecode_backend='pillow'),
     dict(type='BottomupRandomAffine', input_size=codec['input_size']),
-    dict(type='RandomFlip', direction='horizontal'),
+    dict(type='CustomRandomFlip', direction='horizontal'),
     dict(type='GenerateTarget', encoder=codec),
     dict(type='BottomupGetHeatmapMask'),
     dict(type='PackPoseInputs'),
@@ -157,7 +157,11 @@ val_pipeline = [
         meta_keys=('id', 'img_id', 'img_path', 'crowd_index', 'ori_shape',
                    'img_shape', 'input_size', 'input_center', 'input_scale',
                    'flip', 'flip_direction', 'flip_indices', 'raw_ann_info',
-                   'skeleton_links'))
+                   'skeleton_links', 'raw_ann_info',  # 🌟 建议带上这个，它是原始 JSON 信息的备份
+                    'keypoint_types', # 🌟 你的核心分类标签
+                    'custom_reg_weights' # 🌟 你的回归权重
+                   )
+    )
 ]
 
 # data loaders
@@ -207,11 +211,25 @@ val_evaluator = dict(
 test_evaluator = val_evaluator
 
 default_hooks = dict(
-    checkpoint=dict(
-        type='CheckpointHook',
-        interval=1,           # 每隔 1 个 epoch 保存一次（这样第 1 个 epoch 跑完就会存）
-        max_keep_ckpts=3,     # ⚠️ 强烈建议加上这个！只保留最新的 3 个权重，防止硬盘被撑爆
-        save_best='auto',     # 自动保存验证集上指标最好的权重
-        rule='greater'        # 指标越大越好
-    )
+    timer=dict(type='IterTimerHook'),
+    logger=dict(type='LoggerHook', interval=50),
+    param_scheduler=dict(type='ParamSchedulerHook'),
+    checkpoint=dict(type='CheckpointHook', interval=5, max_keep_ckpts=-1),
+    sampler_seed=dict(type='DistSamplerSeedHook'),
 )
+
+# visualizer = dict(
+#     type='PoseLocalVisualizer',
+#     vis_backends=[
+#         dict(type='LocalVisBackend'),
+#         dict(
+#             type='WandbVisBackend',  # 🌟 开启 W&B 魔法
+#             init_kwargs=dict(
+#                 project='prosthetics-pose-estimation',
+#                 name='DEKR-512x512-prosthetics_combined_loss',  # 🌟 名字改成了 YOLOX-S
+#                 entity='qitianye1104'
+#             )
+#         )
+#     ],
+#     name='visualizer'
+# )

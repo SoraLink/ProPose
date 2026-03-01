@@ -275,9 +275,10 @@ class CustomRandomFlip(RandomFlip):
             if results.get('flip_direction', 'horizontal') == 'horizontal':
                 flip_indices = results['flip_indices']
                 types = results['keypoint_types']
-
-
-                results['keypoint_types'] = types[..., flip_indices]
+                if isinstance(types, list):
+                    results['keypoint_types'] = [otype[..., flip_indices] for otype in types]
+                else:
+                    results['keypoint_types'] = types[..., flip_indices]
 
         return results
 

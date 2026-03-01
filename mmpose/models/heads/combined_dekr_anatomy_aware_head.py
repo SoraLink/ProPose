@@ -23,34 +23,6 @@ class CombinedDEKRAnatomyAwareHead(DEKRHead):
                  **kwargs):
         super().__init__(**kwargs)
 
-        # 1. 注册全局回归权重与类别权重表 (基于你的 ProPose 数据集统计)
-        self.register_buffer('w_reg_table', torch.tensor([
-            [0.9348983, 0.0], [0.9356371, 0.0], [0.93539065, 0.0],
-            [0.93615663, 0.0], [0.9361826, 0.0], [0.9283144, 0.0],
-            [0.9279217, 0.0], [0.98167354, 5.0], [0.960146, 5.0],
-            [1.1028655, 3.6270287], [1.0354266, 3.7909665], [0.9303362, 0.0],
-            [0.93055314, 0.0], [1.0990598, 3.0702474], [1.0660323, 3.319553],
-            [1.2535793, 2.9189765], [1.2353523, 2.9720054], [1.11805, 2.9624858],
-            [1.052587, 3.0962512], [1.2955451, 2.2605414], [1.2715614, 2.1721284],
-            [1.3000122, 2.2717884], [1.2757512, 2.187222], [3.3312047, 0.0],
-            [4.2261786, 0.0], [2.2803817, 0.0], [2.7141972, 0.0],
-            [2.5414956, 0.0], [2.866074, 0.0], [3.1917245, 0.0],
-            [2.7873797, 0.0]
-        ], dtype=torch.float32))
-
-        self.register_buffer('w_type_table', torch.tensor([
-            [1.0000, 0.0000, 0.0000], [1.0000, 0.0000, 0.0000], [1.0000, 0.0000, 0.0000],
-            [1.0000, 0.0000, 0.0000], [1.0000, 0.0000, 0.0000], [1.0000, 0.0000, 0.0000],
-            [1.0000, 0.0000, 0.0000], [0.2738, 1.6923, 1.0339], [0.2336, 1.4522, 1.3141],
-            [0.4824, 1.5864, 0.9312], [0.4103, 1.5021, 1.0876], [1.0000, 0.0000, 0.0000],
-            [1.0000, 0.0000, 0.0000], [0.4103, 1.1461, 1.4437], [0.3303, 1.0286, 1.6411],
-            [0.5608, 1.3059, 1.1333], [0.5414, 1.3025, 1.1561], [0.5213, 1.3813, 1.0974],
-            [0.4298, 1.2644, 1.3057], [0.5398, 0.9419, 1.5183], [0.4575, 0.7814, 1.7611],
-            [0.5404, 0.9444, 1.5151], [0.4577, 0.7847, 1.7576], [1.5448, 0.0000, 0.4552],
-            [1.6297, 0.0000, 0.3703], [1.3732, 0.0000, 0.6268], [1.4603, 0.0000, 0.5397],
-            [1.3962, 0.0000, 0.6038], [1.4578, 0.0000, 0.5422], [1.4756, 0.0000, 0.5244],
-            [1.4144, 0.0000, 0.5856]
-        ], dtype=torch.float32))
 
         # 2. 类别预测分支
         self.type_conv_layers = nn.Sequential(
@@ -88,53 +60,128 @@ class CombinedDEKRAnatomyAwareHead(DEKRHead):
         B, K2, H, W = raw_dis_weights.shape
         K = self.num_keypoints
 
-        # 🌟 解码隐藏在权重中的 type 和真正的 vis
-        type_target_map = (raw_dis_weights[:, :K] // 10).long()
-        vis_target_map = (raw_dis_weights[:, :K] % 10).float()
+        # 🌟 1. 创建四张空白画布：Type, Vis, Reg Weight, Type Weight
+        type_target_map = torch.zeros((B, K, H, W), dtype=torch.long, device=pred_heatmaps.device)
+        vis_target_map = torch.zeros((B, K, H, W), dtype=torch.float32, device=pred_heatmaps.device)
+        reg_weight_map = torch.ones((B, K, H, W), dtype=torch.float32, device=pred_heatmaps.device)
+        type_weight_map = torch.zeros((B, K, H, W), dtype=torch.float32, device=pred_heatmaps.device)
 
-        # 🌟 空间级权重查表
-        custom_reg_weights = torch.zeros_like(vis_target_map)
-        for k in range(K):
-            for t_val in [0, 1]:
-                mask = (type_target_map[:, k] == t_val)
-                custom_reg_weights[:, k][mask] = self.w_reg_table[k, t_val]
+        # 🌟 2. 提取全局类别权重并解包 (只需要拿 batch[0] 的即可，因为是全局一致的)
+        g_weights = batch_data_samples[0].gt_instances.global_type_weights
+        if isinstance(g_weights, list): g_weights = g_weights[0]
+        if hasattr(g_weights, 'cpu'): g_weights = g_weights.cpu().numpy()
+        g_weights = g_weights.squeeze()  # 降维成纯净的 [K, 3] 矩阵
 
-        final_dis_weights = torch.cat([vis_target_map * custom_reg_weights] * 2, dim=1)
+        # 🌟 3. 遍历 Batch，开始当“粉刷匠”
+        for b in range(B):
+            img_w, img_h = batch_data_samples[b].metainfo['input_size']
+            scale_w, scale_h = W / img_w, H / img_h
 
+            gt_instances = batch_data_samples[b].gt_instances
+            if 'keypoints' not in gt_instances:
+                continue
+
+            kpts = gt_instances.keypoints
+            vis_real = gt_instances.keypoints_visible
+            N = kpts.shape[0]
+            # 安全解包 Types
+            types = gt_instances.keypoint_types
+            if isinstance(types, list):
+                if len(types) == N:  # 如果是 [Tensor(K), Tensor(K)] 这种按人分开的格式
+                    types = torch.stack(types) if hasattr(types[0], 'cpu') else np.stack(types)
+                else:  # 如果是 [Tensor(N, K)] 这种整体包一层的格式
+                    raise ValueError('types lengthe is not equal to N')
+            if hasattr(types, 'cpu'):
+                types = types.cpu().numpy()
+            types = np.reshape(types, (N, K))  # 强制拉平，杜绝一切后患
+
+            # 安全解包 Custom Reg Weights
+            inst_weights = gt_instances.custom_reg_weights
+            if isinstance(inst_weights, list): inst_weights = inst_weights[0]
+            if hasattr(inst_weights, 'cpu'): inst_weights = inst_weights.cpu().numpy()
+
+            for n in range(kpts.shape[0]):
+                for k in range(K):
+                    if vis_real[n, k] > 0:
+                        cx = int(kpts[n, k, 0] * scale_w)
+                        cy = int(kpts[n, k, 1] * scale_h)
+
+                        r = 3
+                        y_min, y_max = max(0, cy - r), min(H, cy + r + 1)
+                        x_min, x_max = max(0, cx - r), min(W, cx + r + 1)
+
+                        if y_min < y_max and x_min < x_max:
+                            t_val = types[n, k]  # 当前点的类别
+
+                            # 🌟 四笔齐下：把类别、可见度、回归权重、分类权重，精准涂抹在对应像素块上！
+                            type_target_map[b, k, y_min:y_max, x_min:x_max] = t_val
+                            vis_target_map[b, k, y_min:y_max, x_min:x_max] = 1.0
+                            reg_weight_map[b, k, y_min:y_max, x_min:x_max] = float(inst_weights[n, k, 0])
+                            type_weight_map[b, k, y_min:y_max, x_min:x_max] = float(g_weights[k, t_val])
+
+        # 🌟 4. 完美融合底层的高斯掩码与我们的回归权重
+        raw_dis_k = raw_dis_weights[:, :K] * reg_weight_map
+        final_dis_weights = torch.cat([raw_dis_k, raw_dis_k], dim=1)
+
+        # ---------------------------------------------------------
+        # 🌟 5. 开始计算各项 Loss
+        # ---------------------------------------------------------
         losses = dict()
+
         heatmap_weights = torch.stack([d.gt_fields.heatmap_weights for d in batch_data_samples])
-        heatmap_mask = torch.stack([d.gt_fields.heatmap_mask for d in batch_data_samples]) if 'heatmap_mask' in \
-                                                                                              batch_data_samples[
-                                                                                                  0].gt_fields else None
+        if 'heatmap_mask' in batch_data_samples[0].gt_fields.keys():
+            heatmap_mask = torch.stack([d.gt_fields.heatmap_mask for d in batch_data_samples])
+        else:
+            heatmap_mask = None
 
-        losses['loss/heatmap'] = self.loss_module['heatmap'](pred_heatmaps, gt_heatmaps, heatmap_weights, heatmap_mask)
-        losses['loss/displacement'] = self.loss_module['displacement'](pred_displacements, gt_displacements,
-                                                                       final_dis_weights)
+        losses['loss/heatmap'] = self.loss_module['heatmap'](
+            pred_heatmaps, gt_heatmaps, heatmap_weights, heatmap_mask)
+        losses['loss/displacement'] = self.loss_module['displacement'](
+            pred_displacements, gt_displacements, final_dis_weights)
 
-        # 🌟 分类 Loss (密集计算)
-        ce_mask = (vis_target_map > 0).float()
+        # 🌟 分类 Type Loss (完美对齐 ViT 的 gather 加权逻辑)
+        base_ce_mask = (raw_dis_weights[:, :K] > 0).float()
+        ce_mask = base_ce_mask * type_weight_map  # 乘上查表画好的类别权重
+
         pred_type_logits_ce = pred_type_logits.view(B, K, 3, H, W).permute(0, 2, 1, 3, 4)
-        loss_type = self.ce_loss(pred_type_logits_ce, type_target_map)
-        losses['loss/type'] = (loss_type * ce_mask).sum() / (ce_mask.sum() + 1e-6) * self.type_loss_weight
+        raw_loss_type = self.ce_loss(pred_type_logits_ce, type_target_map)
 
-        # 🌟 BioContrastive Loss (适配 DEKR 的空间维度)
+        loss_type = (raw_loss_type * ce_mask).sum() / (ce_mask.sum() + 1e-6)
+        losses['loss/type'] = self.type_loss_weight * loss_type
+
+        # 🌟 BioContrastive Loss (生物力学对比损失)
         if self.with_contrastive:
             type_probs = torch.softmax(pred_type_logits.view(B, K, 3, H, W), dim=2)
-            p_bio = type_probs[:, :, 0]  # 正常类概率 [B, K, H, W]
+            p_bio = type_probs[:, :, 0]  # 取正常类别的概率图 [B, K, H, W]
 
             loss_bio_total, valid_r_count = 0.0, 0.0
             for r, omega_r in self.omega_dict.items():
-                v_r_mask = ((vis_target_map[:, r] > 0) & (type_target_map[:, r] == 0)).float()
-                exp_p_r = torch.exp(p_bio[:, r] / self.tau)
+                # 🌟 注意这里的 mask 逻辑：r 是残肢/假肢点，所以 type 应该 > 0 (1代表假肢, 2代表残肢)
+                # 你之前的代码写的是 == 0，那是正常点，逻辑反了
+                v_r_mask = ((vis_target_map[:, r] > 0) & (type_target_map[:, r] > 0)).float()
 
-                sum_exp_j = torch.zeros_like(exp_p_r)
+                # 计算有效像素个数
+                r_counts = v_r_mask.sum(dim=(1, 2))  # [B]
+
+                # 🌟 只在有效区域求均值，而不是全图均值
+                exp_p_r = (torch.exp(p_bio[:, r] / self.tau) * v_r_mask).sum(dim=(1, 2)) / (r_counts + 1e-6)
+
+                sum_exp_j = torch.zeros_like(exp_p_r)  # [B]
                 for j in omega_r:
                     v_j_mask = (vis_target_map[:, j] > 0).float()
-                    sum_exp_j += v_j_mask * torch.exp(p_bio[:, j] / self.tau)
+                    j_counts = v_j_mask.sum(dim=(1, 2))
+
+                    # 同理，计算参考点 j 的区域平均能量
+                    energy_j = (torch.exp(p_bio[:, j] / self.tau) * v_j_mask).sum(dim=(1, 2)) / (j_counts + 1e-6)
+                    sum_exp_j += energy_j
+
+                # 只有当残肢点 r 存在时才计算
+                valid_mask = (r_counts > 0).float()
 
                 prob_r = exp_p_r / (exp_p_r + sum_exp_j + 1e-6)
-                loss_bio_total += (-torch.log(prob_r + 1e-6) * v_r_mask).sum()
-                valid_r_count += v_r_mask.sum()
+                # 🌟 这里已经是 [B] 维度的标量了，直接求和即可
+                loss_bio_total += (-torch.log(prob_r + 1e-6) * valid_mask).sum()
+                valid_r_count += valid_mask.sum()
 
             losses['loss/bio'] = self.bio_loss_weight * (loss_bio_total / (valid_r_count + 1e-6))
 

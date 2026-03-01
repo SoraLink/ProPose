@@ -209,8 +209,6 @@ class LDProsDataset(CocoDataset):
                 self.W_reg_table[k, 1] = 0.0
 
         self.global_type_weights = torch.from_numpy(self.W_type_table).float()
-        print(self.global_type_weights)
-        print(self.W_reg_table)
         print(f"[{self.__class__.__name__}] Weights Calculation Completed.")
 
 

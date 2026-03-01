@@ -43,62 +43,68 @@ class ProstheticsDEKRMetric(CocoMetric):
         print(f"[{self.__class__.__name__}] Pre-processing complete.")
 
     def process(self, data_batch, data_samples):
-
         super().process(data_batch, data_samples)
         batch_len = len(data_samples)
         start_idx = len(self.results) - batch_len
 
         for i, data_sample in enumerate(data_samples):
-
             target_result = self.results[start_idx + i]
 
+            # 1. 提取预测类型 (从 Head 的 predict 传出来的)
             if 'keypoint_types' in data_sample['pred_instances']:
                 pred_type = data_sample['pred_instances']['keypoint_types']
                 type_probs = data_sample['pred_instances']['type_scores']
             else:
                 raise ValueError('Keypoint types are not available in the prediction results.')
-            gt_instances = data_sample['gt_instances']
 
-            # 1. 检查是否存在 keypoints_visible 字段
-            if 'keypoints_visible' in gt_instances:
-                raw_vis = gt_instances['keypoints_visible']
-                if hasattr(raw_vis, 'cpu'):
-                    raw_vis = raw_vis.cpu().numpy()
-                # 解码 Type
-                gt_type = (raw_vis // 10).astype(int)
+            # 2. 提取真实类型 (从 Dataset 传出来的，现在是纯净字段了！)
+            gt_instances = data_sample['gt_instances']
+            if 'keypoints' not in gt_instances or len(gt_instances['keypoints']) == 0:
+                print(f"⚠️ [Skip] Image {data_sample['img_id']} has no annotations. Skipping custom metrics.")
+                continue
+
+            # 🌟 核心修正：直接直读 keypoint_types
+            if 'keypoint_types' in gt_instances:
+                gt_type = gt_instances['keypoint_types']
             else:
+                # 容错：如果实在没有，根据 BBox 数量填 0
                 num_instances = len(gt_instances.get('bboxes', []))
                 gt_type = np.zeros((num_instances, 31), dtype=int)
 
+            # 🌟 统一格式：处理 Tensor/Numpy/List 的大杂烩
             if hasattr(gt_type, 'cpu'):
-                types_np = gt_type.cpu().numpy()
+                gt_type_np = gt_type.cpu().numpy()
+            elif isinstance(gt_type, list):
+                gt_type_np = np.array(gt_type)
             else:
-                types_np = np.array(gt_type)
+                gt_type_np = gt_type
 
-            _, absent_indices = np.where(types_np == 2)
+            # 确保形状对齐 (N, K)
+            num_instances = len(gt_instances.get('keypoints', []))
+            gt_type_np = gt_type_np.reshape(num_instances, -1)
 
-            # 🌟 2. 针对 DEKR 安全处理 BBox 和 Area
+            # 🌟 3. 处理 DEKR 专属的 BBox 和 Area (OKS 匹配的核心)
             if 'bboxes' in gt_instances:
                 gt_bboxes = gt_instances['bboxes']
                 if 'areas' in gt_instances:
                     gt_areas = gt_instances['areas']
                 else:
-                    # 如果没有显式提供 area，根据 gt_bboxes 计算
                     gt_areas = (gt_bboxes[:, 2] - gt_bboxes[:, 0]) * (gt_bboxes[:, 3] - gt_bboxes[:, 1])
             else:
+                # Bottom-up 容错
                 gt_bboxes = np.zeros((0, 4), dtype=np.float32)
                 gt_areas = np.zeros(0, dtype=np.float32)
 
-            # DEKR 可能根本不输出 bboxes，安全获取
             pred_bboxes = data_sample['pred_instances'].get('bboxes', np.zeros((len(pred_type), 4), dtype=np.float32))
 
+            # 存入结果字典，供 _match_instances 和 compute_metrics 使用
             target_result[0]['pred_types'] = pred_type
-            target_result[0]['gt_types'] = gt_type
+            target_result[0]['gt_types'] = gt_type_np  # 🌟 这里存入的是最干净的 GT 标签
             target_result[0]['gt_instances'] = gt_instances
             target_result[0]['type_scores'] = type_probs
             target_result[0]['pred_bboxes'] = pred_bboxes
             target_result[0]['gt_bboxes'] = gt_bboxes
-            target_result[0]['gt_areas'] = gt_areas  # 🌟 将 area 存入 target_result 方便匹配时调用
+            target_result[0]['gt_areas'] = gt_areas
 
     def _match_instances(self, results):
         """🌟 重写：使用 OKS (Object Keypoint Similarity) 进行 Bottom-up 实例匹配"""
@@ -108,6 +114,14 @@ class ProstheticsDEKRMetric(CocoMetric):
 
         for res in results:
             inst = res[0]
+            if 'gt_instances' not in inst or not inst['gt_instances']:
+                print(f"--- [Match Skip] Image has no GT instances, skipping match. ---")
+                continue
+            gt_inst_data = inst['gt_instances']
+            gt_kpts = gt_inst_data.get('keypoints', []) if isinstance(gt_inst_data, dict) else getattr(gt_inst_data,
+                                                                                                       'keypoints', [])
+            if len(gt_kpts) == 0:
+                continue
             pred_kpts = inst.get('keypoints', [])
             gt_kpts = inst['gt_instances'].get('keypoints', [])
             gt_vis = inst['gt_instances'].get('keypoints_visible', [])
