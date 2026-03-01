@@ -6,7 +6,7 @@ _base_ = '../../../_base_/default_runtime.py'
 # 1. 基础路径与自定义模块导入
 # ==============================================================================
 DATASET_TYPE = 'LDProsYoloDataset'
-DATA_ROOT = '/home/sora/workspace/dataset/pros_final'
+DATA_ROOT = '/home/xins/workspace/pros_final'
 DATA_MODE = 'bottomup'  # 🌟 YOLO 是 Bottom-up，这里必须改！
 
 TRAIN_ANN = os.path.join(DATA_ROOT, 'train_final/train_final.json')
@@ -76,7 +76,7 @@ train_pipeline_stage2 = [
     dict(type='BottomupRandomAffine', input_size=input_size, shift_prob=0, rotate_prob=0, scale_prob=0,
          scale_type='long', pad_val=(114, 114, 114), bbox_keep_corner=False, clip_border=True),
     dict(type='YOLOXHSVRandomAug'),
-    dict(type='RandomFlip'),
+    dict(type='CustomRandomFlip'),
     dict(type='FilterAnnotations', by_kpt=True, by_box=True, keep_empty=False),
     dict(type='GenerateTarget', encoder=codec),
     dict(type='PackPoseInputs'),
@@ -95,7 +95,7 @@ val_pipeline = [
 # 4. DataLoaders (使用你的自定义路径和类)
 # ==============================================================================
 train_dataloader = dict(
-    batch_size=32,  # 注意：如果你显存爆了，改小点，同时 lr 会被 auto_scale_lr 自动按比例缩小
+    batch_size=16,  # 注意：如果你显存爆了，改小点，同时 lr 会被 auto_scale_lr 自动按比例缩小
     num_workers=8,
     persistent_workers=True,
     pin_memory=True,
