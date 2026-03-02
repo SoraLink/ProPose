@@ -90,8 +90,7 @@ class ClassBalancedAnatomyAwareHead(HeatmapHead):
 
         # MSE Loss (Heatmap)
         reg_mask = (visible_flat > 0) & (types_flat != 2)
-        new_target_weight = reg_mask.float() * custom_reg_weights
-        new_target_weight = new_target_weight.view(visible_flat.shape)
+        new_target_weight = reg_mask.float().view(visible_flat.shape)
         loss_kpt = self.loss_module(pred_heatmaps, gt_heatmaps, new_target_weight)
         losses['loss_kpt'] = loss_kpt
 
