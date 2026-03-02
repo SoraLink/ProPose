@@ -4,7 +4,7 @@ _base_ = ['../../../_base_/default_runtime.py']
 
 
 DATASET_TYPE = 'LDProsDataset'
-DATA_ROOT = '/home/sora/workspace/dataset/pros_final'
+DATA_ROOT = '/home/xins/workspace/pros_final'
 DATA_MODE = 'topdown'
 
 TRAIN_ANN = os.path.join(DATA_ROOT, 'train_final/train_final.json')
@@ -44,6 +44,8 @@ default_hooks = dict(checkpoint=dict(save_best='coco/AP', rule='greater'))
 # codec settings
 codec = dict(
     type='MSRAHeatmap', input_size=(192, 256), heatmap_size=(48, 64), sigma=2)
+
+load_from = './models/swin_b_p4_w7_coco_256x192-7432be9e_20220705.pth'
 
 # model settings
 norm_cfg = dict(type='SyncBN', requires_grad=True)
@@ -95,8 +97,7 @@ data_mode = 'topdown'
 train_pipeline = [
     dict(type='LoadImage', imdecode_backend='pillow'),
     dict(type='GetBBoxCenterScale'),
-    dict(type='RandomFlip', direction='horizontal'),
-    dict(type='RandomHalfBody'),
+    dict(type='CustomRandomFlip', direction='horizontal'),
     dict(type='RandomBBoxTransform'),
     dict(type='TopdownAffine', input_size=codec['input_size']),
     dict(type='GenerateTarget', encoder=codec),

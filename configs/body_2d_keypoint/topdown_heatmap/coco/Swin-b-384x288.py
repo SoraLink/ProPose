@@ -4,7 +4,7 @@ _base_ = ['../../../_base_/default_runtime.py']
 
 
 DATASET_TYPE = 'LDProsDataset'
-DATA_ROOT = '/home/sora/workspace/dataset/pros_final'
+DATA_ROOT = '/home/xins/workspace/pros_final'
 DATA_MODE = 'topdown'
 
 TRAIN_ANN = os.path.join(DATA_ROOT, 'train_final/train_final.json')
@@ -33,6 +33,9 @@ param_scheduler = [
     dict(type='LinearLR', begin=0, end=500, start_factor=0.001, by_epoch=False),
     dict(type='CosineAnnealingLR', T_max=50, by_epoch=True)
 ]
+
+load_from = './models/swin_b_p4_w7_coco_384x288-3abf54f9_20220705.pth'
+
 
 # automatically scaling LR based on the actual training batch size
 auto_scale_lr = dict(base_batch_size=64)
@@ -94,8 +97,7 @@ data_mode = 'topdown'
 train_pipeline = [
     dict(type='LoadImage', imdecode_backend='pillow'),
     dict(type='GetBBoxCenterScale'),
-    dict(type='RandomFlip', direction='horizontal'),
-    dict(type='RandomHalfBody'),
+    dict(type='CustomRandomFlip', direction='horizontal'),
     dict(type='RandomBBoxTransform'),
     dict(type='TopdownAffine', input_size=codec['input_size']),
     dict(type='GenerateTarget', encoder=codec),
@@ -110,7 +112,7 @@ val_pipeline = [
 ]
 
 train_dataloader = dict(
-    batch_size=64,
+    batch_size=32,
     num_workers=4,
     persistent_workers=True,
     sampler=dict(type='DefaultSampler', shuffle=True),
