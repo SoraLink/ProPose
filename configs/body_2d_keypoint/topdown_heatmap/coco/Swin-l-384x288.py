@@ -3,7 +3,7 @@ import os
 _base_ = ['../../../_base_/default_runtime.py']
 
 DATASET_TYPE = 'LDProsDataset'
-DATA_ROOT = '/home/sora/workspace/dataset/pros_final'
+DATA_ROOT = '/home/xins/workspace/pros_final'
 DATA_MODE = 'topdown'
 
 TRAIN_ANN = os.path.join(DATA_ROOT, 'train_final/train_final.json')
@@ -103,8 +103,7 @@ data_mode = 'topdown'
 train_pipeline = [
     dict(type='LoadImage', imdecode_backend='pillow'),
     dict(type='GetBBoxCenterScale'),
-    dict(type='RandomFlip', direction='horizontal'),
-    dict(type='RandomHalfBody'),
+    dict(type='CustomRandomFlip', direction='horizontal'),
     dict(type='RandomBBoxTransform'),
     dict(type='TopdownAffine', input_size=codec['input_size']),
     dict(type='GenerateTarget', encoder=codec),
