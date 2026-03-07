@@ -6,6 +6,12 @@ deepen_factor = 0.33
 checkpoint = 'https://download.openmmlab.com/mmdetection/v2.0/yolox/yolox_' \
     'tiny_8x8_300e_coco/yolox_tiny_8x8_300e_coco_20211124_171234-b4047906.pth'
 
+optim_wrapper = dict(
+    type='OptimWrapper',
+    optimizer=dict(type='AdamW', lr=0.001, weight_decay=0.05),
+    paramwise_cfg=dict(norm_decay_mult=0, bias_decay_mult=0, bypass_duplicate=True),
+    clip_grad=dict(max_norm=0.1, norm_type=2))
+
 model = dict(
     data_preprocessor=dict(batch_augments=[
         dict(
@@ -32,7 +38,7 @@ train_pipeline_stage1 = [
         type='Mosaic',
         img_scale=_base_.input_size,
         pad_val=114.0,
-        pre_transform=[dict(type='LoadImage', backend_args=None)]),
+        pre_transform=[dict(type='LoadImage', imdecode_backend='pillow')]),
     dict(
         type='BottomupRandomAffine',
         input_size=_base_.input_size,
@@ -51,20 +57,14 @@ train_pipeline_stage1 = [
     dict(type='GenerateTarget', encoder=_base_.codec),
     dict(
         type='PackPoseInputs',
-        extra_mapping_labels={
-            'bbox': 'bboxes',
-            'bbox_labels': 'labels',
-            'keypoints': 'keypoints',
-            'keypoints_visible': 'keypoints_visible',
-            'area': 'areas'
-        }),
+        ),
 ]
 train_dataloader = dict(
     batch_size=64, dataset=dict(pipeline=train_pipeline_stage1))
 
 input_size = (416, 416)
 val_pipeline = [
-    dict(type='LoadImage'),
+    dict(type='LoadImage', imdecode_backend='pillow'),
     dict(
         type='BottomupResize', input_size=input_size, pad_val=(114, 114, 114)),
     dict(
@@ -75,3 +75,19 @@ val_pipeline = [
 
 val_dataloader = dict(dataset=dict(pipeline=val_pipeline, ))
 test_dataloader = val_dataloader
+
+visualizer = dict(
+    type='PoseLocalVisualizer',
+    vis_backends=[
+        dict(type='LocalVisBackend'),
+        dict(
+            type='WandbVisBackend',  # 🌟 开启 W&B 魔法
+            init_kwargs=dict(
+                project='prosthetics-pose-estimation',
+                name='YOLOX-t-prosthetics_combined_loss',  # 🌟 名字改成了 YOLOX-S
+                entity='qitianye1104'
+            )
+        )
+    ],
+    name='visualizer'
+)

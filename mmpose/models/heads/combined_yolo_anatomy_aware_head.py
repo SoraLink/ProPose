@@ -4,8 +4,6 @@ from typing import List, Optional, Sequence, Tuple, Union
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
-from mmcv.cnn import ConvModule
 from mmengine.structures import InstanceData
 from torch import Tensor
 
@@ -22,6 +20,11 @@ from mmpose.evaluation.functional import nms_torch
 
 @MODELS.register_module()
 class YOLOAnatomyAwareHeadModule(YOLOXPoseHeadModule):
+
+    def __init__(self, detach_type_head=False, **kwargs):
+        super().__init__(**kwargs)
+        self.detach_type_head = detach_type_head
+
     def _init_layers(self):
         super()._init_layers()
         self.out_type = nn.ModuleList()
@@ -51,7 +54,10 @@ class YOLOAnatomyAwareHeadModule(YOLOXPoseHeadModule):
             bbox_preds.append(self.out_bbox[i](reg_feat))
             kpt_offsets.append(self.out_kpt[i](pose_feat))
             kpt_vis.append(self.out_kpt_vis[i](pose_feat))
-            type_preds.append(self.out_type[i](pose_feat))
+            if self.detach_type_head:
+                type_preds.append(self.out_type[i](pose_feat.detach()))
+            else:
+                type_preds.append(self.out_type[i](pose_feat))
 
         return cls_scores, objectnesses, bbox_preds, kpt_offsets, kpt_vis, type_preds
 
@@ -62,6 +68,7 @@ class CombinedYOLOAnatomyAwareHead(YOLOXPoseHead):
                  tau=1.0,
                  bio_loss_weight=1.0,
                  with_contrastive=False,
+                 detach_type_head=False,
                  **kwargs):
         # 初始化原生的 YOLOXPoseHead (包含 bbox, kpt 分支)
         head_module_cfg = kwargs.get('head_module_cfg', dict()).copy()
@@ -96,6 +103,7 @@ class CombinedYOLOAnatomyAwareHead(YOLOXPoseHead):
             [1.4144, 0.0000, 0.5856]
         ], dtype=torch.float32))
 
+        self.detach_head_type = detach_type_head
         self.tau = tau
         self.type_loss_weight = type_loss_weight
         self.bio_loss_weight = bio_loss_weight
@@ -104,6 +112,7 @@ class CombinedYOLOAnatomyAwareHead(YOLOXPoseHead):
         if head_module_cfg:
             head_module_cfg['featmap_strides'] = self.featmap_strides
             head_module_cfg['num_keypoints'] = self.num_keypoints
+            head_module_cfg['detach_type_head'] = self.detach_head_type
             self.head_module = YOLOAnatomyAwareHeadModule(**head_module_cfg)
 
         # 解剖学拓扑字典

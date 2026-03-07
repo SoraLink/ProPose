@@ -1,20 +1,14 @@
 import os.path
 
-# ==============================================================================
-# 1. 基础配置与全局加载 (核心修改：全权重加载)
-# ==============================================================================
 _base_ = [
     '../../../_base_/default_runtime.py',
 ]
-
-# 🌟 核心：直接加载你训练好的 0.897 完整模型（含 Backbone 和 Head）
-load_from = './work_dirs/VIT_L_prosthetics_combined_loss_finetune/epoch_1.pth'
 
 DATASET_TYPE = 'LDProsDataset'
 DATA_ROOT = '/home/sora/workspace/dataset/pros_final'
 DATA_MODE = 'topdown'
 
-TRAIN_ANN = os.path.join(DATA_ROOT, 'train_final/train_final.json')
+TRAIN_ANN = os.path.join(DATA_ROOT, 'train/train_final.json')
 VAL_ANN =   os.path.join(DATA_ROOT, 'test_final/test_final.json')
 TEST_ANN =  os.path.join(DATA_ROOT, 'test_final/test_final.json')
 randomness = dict(seed=42, deterministic=False)
@@ -22,7 +16,7 @@ randomness = dict(seed=42, deterministic=False)
 custom_imports = dict(
     imports=[
         'mmpose.evaluation.metrics.prosthetics_metrics_baseline',
-        'mmpose.models.heads.combined_anatomy_aware_head',
+        'mmpose.models.heads.class_balanced_anatomy_aware_head',
         'mmpose.datasets.datasets.custom.ld_pros_dataset',
     ],
     allow_failed_imports=False
@@ -39,14 +33,12 @@ codec = dict(
 )
 
 # ==============================================================================
-# 3. Optimizer & Scheduler (核心修改：极低学习率微调)
+# 3. Model Configuration
 # ==============================================================================
+
 optim_wrapper = dict(
     optimizer=dict(
-        type='AdamW',
-        lr=5e-5, # 🌟 降到原来的 1/10，防止微调时冲垮 AP
-        betas=(0.9, 0.999),
-        weight_decay=0.1),
+        type='AdamW', lr=5e-4, betas=(0.9, 0.999), weight_decay=0.1),
     paramwise_cfg=dict(
         num_layers=24,
         layer_decay_rate=0.8,
@@ -61,21 +53,17 @@ optim_wrapper = dict(
     clip_grad=dict(max_norm=1., norm_type=2),
 )
 
-# 微调不需要太长的 Warmup，直接 Cosine 退火跑 5-10 个 epoch
 param_scheduler = [
-    dict(type='LinearLR', begin=0, end=100, start_factor=0.001, by_epoch=False),
-    dict(type='CosineAnnealingLR', T_max=10, by_epoch=True)
+    dict(type='LinearLR', begin=0, end=500, start_factor=0.001, by_epoch=False),
+    dict(type='CosineAnnealingLR', T_max=50, by_epoch=True)
 ]
 
 train_cfg = dict(
     by_epoch=True,
-    max_epochs=10,  # 🌟 跑 10 个 Epoch 足够看出 Contrast Loss 是否有效
-    val_interval=1  # 🌟 每一轮都验一次，方便对比数据
+    max_epochs=50,
+    val_interval=5
 )
 
-# ==============================================================================
-# 4. Model Configuration
-# ==============================================================================
 model = dict(
     type='TopdownPoseEstimator',
     data_preprocessor=dict(
@@ -94,13 +82,13 @@ model = dict(
         with_cls_token=False,
         out_type='featmap',
         patch_cfg=dict(padding=2),
-        # 这里的 init_cfg 依然保留，但 load_from 的权重会自动覆盖它
         init_cfg=dict(
             type='Pretrained',
-            checkpoint='https://download.openmmlab.com/mmpose/v1/pretrained_models/mae_pretrain_vit_large_20230913.pth'),
+            checkpoint='https://download.openmmlab.com/mmpose/'
+                       'v1/pretrained_models/mae_pretrain_vit_large_20230913.pth'),
     ),
     head=dict(
-        type='CombinedAnatomyAwareHead',
+        type='ClassBalancedAnatomyAwareHead',
         in_channels=1024,
         out_channels=31,
         deconv_out_channels=(256, 256),
@@ -111,8 +99,7 @@ model = dict(
         ),
         decoder=codec,
         type_loss_weight=0.001,
-        tau=0.2,
-        bio_loss_weight=0.0003, # 🌟 开启对比损失
+        detach_type_head=False,
     ),
     test_cfg=dict(
         flip_mode='heatmap',
@@ -121,7 +108,7 @@ model = dict(
 )
 
 # ==============================================================================
-# 5. Data Pipeline (保持不变)
+# 4. Data Pipeline
 # ==============================================================================
 train_pipeline = [
     dict(type='LoadImage', imdecode_backend='pillow'),
@@ -142,7 +129,7 @@ val_pipeline = [
 ]
 
 # ==============================================================================
-# 6. Dataloaders & Evaluators (保持不变)
+# 5. Dataloaders (核心修正处)
 # ==============================================================================
 train_dataloader = dict(
     batch_size=64,
@@ -159,45 +146,70 @@ train_dataloader = dict(
 )
 
 val_dataloader = dict(
-    batch_size=32, num_workers=4, persistent_workers=True, drop_last=False,
+    batch_size=32,
+    num_workers=4,
+    persistent_workers=True,
+    drop_last=False,
     sampler=dict(type='DefaultSampler', shuffle=False),
     dataset=dict(
-        type=DATASET_TYPE, data_root=DATA_ROOT, ann_file=VAL_ANN,
-        data_prefix=dict(img='images/'), pipeline=val_pipeline, test_mode=True,
+        type=DATASET_TYPE, # <--- 修正
+        data_root=DATA_ROOT,
+        ann_file=VAL_ANN,
+        data_prefix=dict(img='test_final/images/'),
+        pipeline=val_pipeline,
+        test_mode=True,
     )
 )
 
-test_dataloader = val_dataloader
+test_dataloader = dict(
+    batch_size=32,
+    num_workers=4,
+    persistent_workers=True,
+    drop_last=False,
+    sampler=dict(type='DefaultSampler', shuffle=False),
+    dataset=dict(
+        type=DATASET_TYPE, # <--- 修正
+        data_root=DATA_ROOT,
+        ann_file=TEST_ANN,
+        data_prefix=dict(img='test_final/images/'),
+        pipeline=val_pipeline,
+        test_mode=True,
+    )
+)
 
+# ==============================================================================
+# 6. Evaluators
+# ==============================================================================
 val_evaluator = dict(
-    type='ProstheticsMetric',
-    ann_file=VAL_ANN,
+    type='ProstheticsMetric', # 这里的 type 才是 Metric 的名字
+    ann_file=VAL_ANN,         # 使用变量，保持一致
     score_thr=0.3,
 )
-test_evaluator = val_evaluator
 
-# ==============================================================================
-# 7. Hooks & Visualizer
-# ==============================================================================
+test_evaluator = dict(
+    type='ProstheticsMetric',
+    ann_file=TEST_ANN,        # 使用变量
+    score_thr=0.3,
+)
+
 default_hooks = dict(
     timer=dict(type='IterTimerHook'),
-    logger=dict(type='LoggerHook', interval=50),
+    logger=dict(type='LoggerHook', interval=50), # 打印日志
     param_scheduler=dict(type='ParamSchedulerHook'),
-    # 🌟 每一轮都存，方便你回头挑最好的那个数据证明对比有效
-    checkpoint=dict(type='CheckpointHook', interval=1, max_keep_ckpts=-1),
+    checkpoint=dict(type='CheckpointHook', interval=5, max_keep_ckpts=-1),
     sampler_seed=dict(type='DistSamplerSeedHook'),
 )
 
 visualizer = dict(
     type='PoseLocalVisualizer',
     vis_backends=[
-        dict(type='LocalVisBackend'),
+        dict(type='LocalVisBackend'),  # 保留本地日志记录
         dict(
-            type='WandbVisBackend',
+            type='WandbVisBackend',    # 🌟 开启 W&B 魔法
             init_kwargs=dict(
-                project='prosthetics-pose-estimation',
-                name='ViT-L-Refine_with_Contrast', # 名字改一下，方便在 Wandb 对比
-                entity='qitianye1104'
+                project='prosthetics-pose-estimation',  # W&B 上的项目名称
+                name='ViT-L-prosthetics_CB_loss',         # 这次 Run 的名字
+                entity='qitianye1104'                    # (可选) 你的 W&B 账号名或团队名
             )
         )
     ],

@@ -170,7 +170,7 @@ model = dict(
         tau=0.2,
         bio_loss_weight=0.0003,
         with_contrastive=False,
-
+        detach_type_head=True,
         head_module_cfg=dict(
             num_classes=1, in_channels=256, feat_channels=256, widen_factor=widen_factor,
             stacked_convs=2, norm_cfg=dict(type='BN', momentum=0.03, eps=0.001), act_cfg=dict(type='Swish')),
