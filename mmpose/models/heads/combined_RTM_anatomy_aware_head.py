@@ -45,7 +45,7 @@ class CombinedRTMAnatomyAwareHead(RTMCCHead):
     def forward(self, feats, with_type=False):
         x = feats[-1]
 
-        pred_x, pred_y = super().forward(feats.detach())
+        pred_x, pred_y = super().forward(feats)
 
         if not with_type:
             return (pred_x, pred_y)
