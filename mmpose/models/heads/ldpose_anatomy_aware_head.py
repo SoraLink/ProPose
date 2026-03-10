@@ -60,15 +60,17 @@ class ProPoseHeatmapHead(HeatmapHead):
         losses['loss_kpt'] = loss_kpt
 
         # --- 3. Limb-Deficient Loss (LDLoss) ---
+        # --- 3. Limb-Deficient Loss (LDLoss) ---
         # 对于 Heatmap 架构，点的 confidence logit 是它在特征图上的最大响应值 (Peak Value)
         # 将 [B, K, H, W] 展平成 [B, K, H*W] 并取最大值，得到 [B, K]
-        conf_logits = pred_heatmaps.view(B, K, -1).max(dim=2)[0]  
+        conf_logits = pred_heatmaps.view(B, K, -1).max(dim=2)[0]
 
         # 提取互斥对 logits 和 visible
         pair_indices = torch.tensor(self.propose_pairs, device=device)
 
         pair_logits = conf_logits[:, pair_indices]  # [B, num_pairs, 2]
-        pair_visible = reg_mask[:, pair_indices]    # [B, num_pairs, 2] 使用严谨的 reg_mask 作为可见性
+        # 注意：这里把 reg_mask 转成 float，方便后面计算
+        pair_visible = reg_mask[:, pair_indices].float()  # [B, num_pairs, 2]
 
         # Ground truth class: 0 代表完整关节可见，1 代表残肢端点可见
         pair_target_class = torch.argmax(pair_visible.int(), dim=2)  # [B, num_pairs]
@@ -76,12 +78,31 @@ class ProPoseHeatmapHead(HeatmapHead):
         # 掩码：如果两个点都不存在（比如被严重遮挡），则不计算这个对的 LDLoss
         pair_mask = (pair_visible.sum(dim=2) > 0).float()  # [B, num_pairs]
 
-        flat_logits = pair_logits.view(-1, 2)
-        flat_targets = pair_target_class.view(-1)
-        flat_mask = pair_mask.view(-1)
+        # =================================================================
+        # 核心公式：严格对齐 LDPose 论文的张量推导版
+        # =================================================================
 
-        raw_loss_ld = self.ce_loss(flat_logits, flat_targets)
-        loss_ld = (raw_loss_ld * flat_mask).sum() / (flat_mask.sum() + 1e-6)
+        # 数值稳定性操作 (防止 exp 溢出导致 NaN)
+        max_logits = torch.max(pair_logits, dim=2, keepdim=True)[0].detach()
+        stable_logits = pair_logits - max_logits  # [B, num_pairs, 2]
+
+        # 计算分子 (Numerator): exp(z_{y_i} - max)
+        target_logits = stable_logits.gather(2, pair_target_class.unsqueeze(2)).squeeze(2)
+        numerator = torch.exp(target_logits)
+
+        # 计算分母 (Denominator): exp(z_0 - max) + exp(z_1 - max)
+        denominator = torch.sum(torch.exp(stable_logits), dim=2)
+
+        # 计算对数概率 (加上 1e-6 防止 log(0) 引起灾难)
+        log_prob = torch.log(numerator / (denominator + 1e-6))  # [B, num_pairs]
+
+        # 乘以掩码并求和 ( \sum M_i * (-log_prob) )
+        loss_per_pair = -log_prob * pair_mask
+        sum_loss = torch.sum(loss_per_pair)
+
+        # 计算有效 Pairs 的平均值
+        valid_pairs_count = torch.sum(pair_mask)
+        loss_ld = sum_loss / (valid_pairs_count + 1e-6)
 
         losses['loss_ld'] = self.ld_loss_weight * loss_ld
 
