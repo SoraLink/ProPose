@@ -11,6 +11,7 @@ from mmpose.utils.tensor_utils import to_numpy
 class ProPoseRTMHead(RTMCCHead):
     def __init__(self,
                  ld_loss_weight=1.0,
+                 propose_pairs=None,
                  **kwargs):
         super().__init__(**kwargs)
         self.ld_loss_weight = ld_loss_weight
@@ -18,16 +19,17 @@ class ProPoseRTMHead(RTMCCHead):
         # 互斥对的二分类交叉熵
         self.ce_loss = nn.CrossEntropyLoss(reduction='none')
 
-        self.propose_pairs = [
-            [7, 23],   # left_elbow vs L-Elbow-Res-Above
-            [8, 24],   # right_elbow vs R-Elbow-Res-Above
-            [9, 25],   # left_wrist vs L-Elbow-Res-Below
-            [10, 26],  # right_wrist vs R-Elbow-Res-Below
-            [13, 27],  # left_knee vs L-Knee-Res-Above
-            [14, 28],  # right_knee vs R-Knee-Res-Above
-            [15, 29],  # left_ankle vs L-Knee-Res-Below
-            [16, 30]   # right_ankle vs R-Knee-Res-Below
+        default_propose_pairs = [
+            [7, 17],  # Left Elbow vs Above Left Elbow Residual
+            [8, 18],  # Right Elbow vs Above Right Elbow Residual
+            [9, 19],  # Left Wrist vs Below Left Elbow Residual
+            [10, 20],  # Right Wrist vs Below Right Elbow Residual
+            [13, 21],  # Left Knee vs Above Left Knee Residual
+            [14, 22],  # Right Knee vs Above Right Knee Residual
+            [15, 23],  # Left Ankle vs Below Left Knee Residual
+            [16, 24]  # Right Ankle vs Below Right Knee Residual
         ]
+        self.propose_pairs = propose_pairs if propose_pairs is not None else default_propose_pairs
 
     def forward(self, feats):
         # 纯粹依赖基础的 RTMCCHead 输出 pred_x 和 pred_y
@@ -48,13 +50,11 @@ class ProPoseRTMHead(RTMCCHead):
             for d in batch_data_samples
         ]).to(device).view(B, K)
 
-        # 获取 keypoint_types
-        gt_types = torch.stack([d.gt_instances['keypoint_types'] for d in batch_data_samples]).to(device).long()
-        types_flat = gt_types.view(B, K)
+
 
         # --- 2. 基础回归 Loss (SimCC) ---
         # 还原你的逻辑：使用 type 和 vis 一起决定 regression mask
-        reg_mask = (target_visible > 0) & (types_flat != 2)
+        reg_mask = (target_visible > 0)
         new_target_weight = reg_mask.float()  # 已彻底移除 custom_reg_weights
 
         pred_simcc = (pred_x, pred_y)

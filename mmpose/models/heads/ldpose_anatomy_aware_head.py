@@ -21,14 +21,14 @@ class ProPoseHeatmapHead(HeatmapHead):
 
         # 完美匹配 ld_pros_pose (31 keypoints) 的定义
         default_propose_pairs = [
-            [7, 23],   # left_elbow vs L-Elbow-Res-Above
-            [8, 24],   # right_elbow vs R-Elbow-Res-Above
-            [9, 25],   # left_wrist vs L-Elbow-Res-Below
-            [10, 26],  # right_wrist vs R-Elbow-Res-Below
-            [13, 27],  # left_knee vs L-Knee-Res-Above
-            [14, 28],  # right_knee vs R-Knee-Res-Above
-            [15, 29],  # left_ankle vs L-Knee-Res-Below
-            [16, 30]   # right_ankle vs R-Knee-Res-Below
+            [7, 17],   # Left Elbow vs Above Left Elbow Residual
+            [8, 18],   # Right Elbow vs Above Right Elbow Residual
+            [9, 19],   # Left Wrist vs Below Left Elbow Residual
+            [10, 20],  # Right Wrist vs Below Right Elbow Residual
+            [13, 21],  # Left Knee vs Above Left Knee Residual
+            [14, 22],  # Right Knee vs Above Right Knee Residual
+            [15, 23],  # Left Ankle vs Below Left Knee Residual
+            [16, 24]   # Right Ankle vs Below Right Knee Residual
         ]
         self.propose_pairs = propose_pairs if propose_pairs is not None else default_propose_pairs
 
@@ -50,13 +50,10 @@ class ProPoseHeatmapHead(HeatmapHead):
             for d in batch_data_samples
         ]).to(device).view(B, K)
 
-        # 获取 keypoint_types
-        gt_types = torch.stack([d.gt_instances['keypoint_types'] for d in batch_data_samples]).to(device).long()
-        types_flat = gt_types.view(B, K)
 
         # --- 2. 基础回归 Loss (Heatmap MSE) ---
         # 使用 type 和 vis 一起决定 regression mask
-        reg_mask = (target_visible > 0) & (types_flat != 2)
+        reg_mask = (target_visible > 0)
         new_target_weight = reg_mask.float()  # [B, K]
 
         loss_kpt = self.loss_module(pred_heatmaps, gt_heatmaps, new_target_weight)
