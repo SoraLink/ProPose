@@ -8,7 +8,7 @@ from mmpose.utils.tensor_utils import to_numpy
 
 
 @MODELS.register_module()
-class ProPoseRTMHead(RTMCCHead):
+class LDPoseRTMHead(RTMCCHead):
     def __init__(self,
                  ld_loss_weight=1.0,
                  propose_pairs=None,
