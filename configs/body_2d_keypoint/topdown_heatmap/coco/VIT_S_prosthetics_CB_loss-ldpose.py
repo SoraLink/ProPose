@@ -2,13 +2,15 @@ import os
 
 _base_ = ['../../../_base_/default_runtime.py']
 
+
 DATASET_TYPE = 'LDDataset'
 DATA_ROOT = '/home/sora/workspace/dataset/pros_final'
 DATA_MODE = 'topdown'
 
 TRAIN_ANN = os.path.join(DATA_ROOT, 'train_final/ldpose_train_25kpts.json')
-VAL_ANN =   os.path.join(DATA_ROOT, 'test_final/ldpose_test_25kpts.json')
-TEST_ANN =  os.path.join(DATA_ROOT, 'test_final/ldpose_test_25kpts.json')
+VAL_ANN = os.path.join(DATA_ROOT, 'test_final/ldpose_test_25kpts.json')
+TEST_ANN = os.path.join(DATA_ROOT, 'test_final/ldpose_test_25kpts.json')
+randomness = dict(seed=42, deterministic=False)
 
 custom_imports = dict(
     imports=[
@@ -19,23 +21,33 @@ custom_imports = dict(
     allow_failed_imports=False
 )
 
+codec = dict(
+    type='UDPHeatmap',
+    input_size=(192, 256),
+    heatmap_size=(48, 64),
+    sigma=2.0
+)
 # runtime
-train_cfg = dict(max_epochs=30, val_interval=10)
+train_cfg = dict(max_epochs=50, val_interval=10)
 
 # optimizer
+
 optim_wrapper = dict(
     optimizer=dict(
-        type='AdamW',
-        lr=5e-4,
-        betas=(0.9, 0.999),
-        weight_decay=0.01,
-    ),
+        type='AdamW', lr=5e-4, betas=(0.9, 0.999), weight_decay=0.1),
     paramwise_cfg=dict(
+        num_layers=12,
+        layer_decay_rate=0.8,
         custom_keys={
-            'absolute_pos_embed': dict(decay_mult=0.),
-            'relative_position_bias_table': dict(decay_mult=0.),
-            'norm': dict(decay_mult=0.)
-        }))
+            'bias': dict(decay_multi=0.0),
+            'pos_embed': dict(decay_mult=0.0),
+            'relative_position_bias_table': dict(decay_mult=0.0),
+            'norm': dict(decay_mult=0.0),
+        },
+    ),
+    constructor='LayerDecayOptimWrapperConstructor',
+    clip_grad=dict(max_norm=1., norm_type=2),
+)
 
 # learning policy
 param_scheduler = [
@@ -47,16 +59,12 @@ param_scheduler = [
 auto_scale_lr = dict(base_batch_size=64)
 
 # hooks
-default_hooks = dict(checkpoint=dict(save_best='coco/AP', rule='greater'))
 
 # codec settings
 codec = dict(
-    type='MSRAHeatmap', input_size=(288, 384), heatmap_size=(72, 96), sigma=2)
-
-load_from = './models/swin/swin_l_p4_w7_coco_384x288-c36b7845_20220705.pth'
+    type='UDPHeatmap', input_size=(192, 256), heatmap_size=(48, 64), sigma=2)
 
 # model settings
-norm_cfg = dict(type='SyncBN', requires_grad=True)
 model = dict(
     type='TopdownPoseEstimator',
     data_preprocessor=dict(
@@ -65,63 +73,60 @@ model = dict(
         std=[58.395, 57.12, 57.375],
         bgr_to_rgb=True),
     backbone=dict(
-        type='SwinTransformer',
-        embed_dims=192,
-        depths=[2, 2, 18, 2],
-        num_heads=[6, 12, 24, 48],
-        window_size=7,
-        mlp_ratio=4,
+        type='mmpretrain.VisionTransformer',
+        arch={
+            'embed_dims': 384,
+            'num_layers': 12,
+            'num_heads': 12,
+            'feedforward_channels': 384 * 4
+        },
+        img_size=(256, 192),
+        patch_size=16,
         qkv_bias=True,
-        qk_scale=None,
-        drop_rate=0.,
-        attn_drop_rate=0.,
-        drop_path_rate=0.5,
-        patch_norm=True,
-        out_indices=(3, ),
-        with_cp=False,
-        convert_weights=True,
+        drop_path_rate=0.1,
+        with_cls_token=False,
+        out_type='featmap',
+        patch_cfg=dict(padding=2),
         init_cfg=dict(
             type='Pretrained',
-            checkpoint='https://github.com/SwinTransformer/storage/releases/'
-            'download/v1.0.0/swin_large_patch4_window12_384_22k.pth'),
+            checkpoint='https://download.openmmlab.com/mmpose/'
+            'v1/pretrained_models/mae_pretrain_vit_small_20230913.pth'),
     ),
     head=dict(
-        type='LDPoseHeatmapHead',
-        in_channels=1536,
+        type='ProPoseHeatmapHead',
+        in_channels=384,
         out_channels=25,
-        ld_loss_weight=0.001,
+        deconv_out_channels=(256, 256),
+        deconv_kernel_sizes=(4, 4),
         loss=dict(type='KeypointMSELoss', use_target_weight=True),
-        decoder=codec),
+        decoder=codec,
+        ld_loss_weight=1.0,
+    ),
     test_cfg=dict(
         flip_mode='heatmap',
-        shift_heatmap=True,
+        shift_heatmap=False,
     ))
-
-# base dataset settings
-dataset_type = 'LDProsDataset'
-data_mode = 'topdown'
 
 # pipelines
 train_pipeline = [
     dict(type='LoadImage', imdecode_backend='pillow'),
     dict(type='GetBBoxCenterScale'),
+    dict(type='CustomRandomFlip', direction='horizontal'),
     dict(type='RandomBBoxTransform'),
-    dict(type='TopdownAffine', input_size=codec['input_size']),
+    dict(type='TopdownAffine', input_size=codec['input_size'], use_udp=True),
     dict(type='GenerateTarget', encoder=codec),
     dict(type='PackPoseInputs')
 ]
-
 val_pipeline = [
     dict(type='LoadImage', imdecode_backend='pillow'),
     dict(type='GetBBoxCenterScale'),
-    dict(type='TopdownAffine', input_size=codec['input_size']),
+    dict(type='TopdownAffine', input_size=codec['input_size'], use_udp=True),
     dict(type='PackPoseInputs')
 ]
 
-
 # data loaders
 train_dataloader = dict(
-    batch_size=24,
+    batch_size=64,
     num_workers=4,
     persistent_workers=True,
     sampler=dict(type='DefaultSampler', shuffle=True),
@@ -133,6 +138,7 @@ train_dataloader = dict(
         pipeline=train_pipeline,
     )
 )
+
 val_dataloader = dict(
     batch_size=32,
     num_workers=4,
@@ -148,6 +154,7 @@ val_dataloader = dict(
         test_mode=True,
     )
 )
+
 test_dataloader = dict(
     batch_size=32,
     num_workers=4,
@@ -165,15 +172,8 @@ test_dataloader = dict(
 )
 
 # evaluators
-val_evaluator = dict(
-    type='CocoMetric', # 这里的 type 才是 Metric 的名字
-    ann_file=VAL_ANN,         # 使用变量，保持一致
-)
-
-test_evaluator = dict(
-    type='CocoMetric',
-    ann_file=TEST_ANN,        # 使用变量
-)
+val_evaluator = dict(type='CocoMetric', ann_file=VAL_ANN)
+test_evaluator = dict(type='CocoMetric', ann_file=TEST_ANN)
 
 default_hooks = dict(
     timer=dict(type='IterTimerHook'),
@@ -191,7 +191,7 @@ visualizer = dict(
             type='WandbVisBackend',    # 🌟 开启 W&B 魔法
             init_kwargs=dict(
                 project='prosthetics-pose-estimation',  # W&B 上的项目名称
-                name='Swin-l-prosthetics_CB_loss_384x288-ldpose',         # 这次 Run 的名字
+                name='ViT-S-prosthetics_CB_loss',         # 这次 Run 的名字
                 entity='qitianye1104'                    # (可选) 你的 W&B 账号名或团队名
             )
         )

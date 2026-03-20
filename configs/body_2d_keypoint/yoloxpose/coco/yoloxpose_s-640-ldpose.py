@@ -30,7 +30,7 @@ custom_imports = dict(
 train_cfg = dict(
     _delete_=True,
     type='EpochBasedTrainLoop',
-    max_epochs=100,
+    max_epochs=80,
     val_interval=10,
     dynamic_intervals=[(80, 1)])  # 最后20轮(Stage2)每个epoch都验证
 

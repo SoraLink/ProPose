@@ -188,67 +188,51 @@ class CombinedDEKRAnatomyAwareHead(DEKRHead):
         return losses
 
     def predict(self, feats, batch_data_samples, test_cfg={}):
-        assert len(batch_data_samples) == 1, f'DEKRHead only supports ' \
-                                             f'prediction with batch_size 1, but got {len(batch_data_samples)}'
+        assert len(
+            batch_data_samples) == 1, f'DEKRHead only supports prediction with batch_size 1, but got {len(batch_data_samples)}'
 
         multiscale_test = test_cfg.get('multiscale_test', False)
         flip_test = test_cfg.get('flip_test', False)
         metainfo = batch_data_samples[0].metainfo
-        aug_scales = [1]
-
-        if not multiscale_test:
-            feats = [feats]
-        else:
-            aug_scales = aug_scales + metainfo['aug_scales']
+        aug_scales = [1] + metainfo.get('aug_scales', []) if multiscale_test else [1]
 
         heatmaps, displacements = [], []
-        # 🌟 声明一个变量，专门用来存提取 type_logits
         final_type_logits = None
 
-        for feat, s in zip(feats, aug_scales):
+        for feat, s in zip(feats if multiscale_test else [feats], aug_scales):
             if flip_test:
                 assert isinstance(feat, list) and len(feat) == 2
                 flip_indices = metainfo['flip_indices']
                 _feat, _feat_flip = feat
 
-                # 🌟 核心修改 1：接收 3 个返回值！
                 _heatmaps, _displacements, _type_logits = self.forward(_feat)
                 _heatmaps_flip, _displacements_flip, _ = self.forward(_feat_flip)
 
-                # 翻转融合逻辑 (与官方完全一致)
                 _heatmaps_flip = flip_heatmaps(
-                    _heatmaps_flip,
-                    flip_mode='heatmap',
+                    _heatmaps_flip, flip_mode='heatmap',
                     flip_indices=flip_indices + [len(flip_indices)],
                     shift_heatmap=test_cfg.get('shift_heatmap', False))
                 _heatmaps = (_heatmaps + _heatmaps_flip) / 2.0
 
                 _displacements_flip = flip_heatmaps(
-                    _displacements_flip,
-                    flip_mode='offset',
-                    flip_indices=flip_indices,
-                    shift_heatmap=False)
+                    _displacements_flip, flip_mode='offset',
+                    flip_indices=flip_indices, shift_heatmap=False)
 
                 x_scale_factor = s * (metainfo['input_size'][0] / _heatmaps.shape[-1])
                 _displacements_flip[:, ::2] += (x_scale_factor - 1) / x_scale_factor
                 _displacements = (_displacements + _displacements_flip) / 2.0
 
-                # 🌟 为了不增加翻转类别预测的复杂度，分类我们直接使用原图(未翻转)的特征
                 final_type_logits = _type_logits
-
             else:
-                # 🌟 未开启 flip_test 的正常流程，同样接收 3 个返回值
                 _heatmaps, _displacements, final_type_logits = self.forward(feat)
 
-            # 存入列表，完美契合 decode 的期望格式！
             heatmaps.append(_heatmaps)
             displacements.append(_displacements)
 
-        # 调用官方底层解码器，因为传的是 List，就不会报错了
         preds = self.decode(heatmaps, displacements, test_cfg, metainfo)
 
         # -----------------------------------------------------------------
-        # 🌟 下面完全是我们自己的 Grid Sample 提取类别的逻辑 (一行没动)
+        # 🌟 【关键修复 3】：防止坐标时空越界导致 grid_sample 提取出纯 0 (类别 0)
         # -----------------------------------------------------------------
         B, C, H, W = final_type_logits.shape
         type_logits_view = final_type_logits.view(B, self.num_keypoints, 3, H, W)
@@ -257,9 +241,19 @@ class CombinedDEKRAnatomyAwareHead(DEKRHead):
             if len(results.keypoints) > 0:
                 kpts = torch.from_numpy(results.keypoints).to(final_type_logits.device)
 
-                # 归一化坐标到 [-1, 1] 用于 grid_sample
                 img_w, img_h = batch_data_samples[i].metainfo['input_size']
+                ori_shape = batch_data_samples[i].metainfo['ori_shape']
+                ori_h, ori_w = ori_shape[0], ori_shape[1]
+
+                # MMPose Bottom-up Resize 通常是等比例缩放，左上角对齐(即不需要处理 pad 偏移)
+                scale = min(img_w / ori_w, img_h / ori_h)
+
+                # 把解码后的原图坐标，还原回 input_size (比如 512x512) 坐标系
                 grid_kpts = kpts.clone()
+                grid_kpts[..., 0] = grid_kpts[..., 0] * scale
+                grid_kpts[..., 1] = grid_kpts[..., 1] * scale
+
+                # 归一化到 [-1, 1] 供 grid_sample 使用
                 grid_kpts[..., 0] = (grid_kpts[..., 0] / (img_w - 1)) * 2 - 1
                 grid_kpts[..., 1] = (grid_kpts[..., 1] / (img_h - 1)) * 2 - 1
 
@@ -268,6 +262,7 @@ class CombinedDEKRAnatomyAwareHead(DEKRHead):
                 for k in range(self.num_keypoints):
                     single_kpt_logits = type_logits_view[i:i + 1, k]
                     single_grid = grid_kpts[:, k:k + 1, :].view(1, N, 1, 2)
+                    # align_corners=True 防止边界像素偏移
                     sampled = F.grid_sample(single_kpt_logits, single_grid, align_corners=True)
                     sampled_types.append(sampled.view(3, N).T)
 

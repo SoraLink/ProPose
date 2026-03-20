@@ -55,7 +55,7 @@ def convert_single_file(input_json_path, output_json_path):
             t = old_types[idx]
 
             # 核心规则：如果 type 是 2 (Missing)，强制 vis = 0 且坐标归零
-            if t == 2:
+            if t == 2 or t == 1:
                 v = 0
 
             # COCO 规范：不可见点的坐标设为 0
@@ -106,7 +106,7 @@ if __name__ == "__main__":
         },
         {
             "input": "/home/sora/workspace/dataset/pros_final/test_final/test_final.json",
-            "output": "/home/sora/workspace/dataset/pros_final/train_final/ldpose_test_25kpts.json"
+            "output": "/home/sora/workspace/dataset/pros_final/test_final/ldpose_test_25kpts.json"
         }
     ]
 

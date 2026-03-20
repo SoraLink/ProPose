@@ -4,11 +4,14 @@ _base_ = [
     '../../../_base_/default_runtime.py',
 ]
 
+load_from = './work_dirs/VIT_H_prosthetics_CB_loss/epoch_50.pth'
+
+
 DATASET_TYPE = 'LDProsDataset'
 DATA_ROOT = '/home/sora/workspace/dataset/pros_final'
 DATA_MODE = 'topdown'
 
-TRAIN_ANN = os.path.join(DATA_ROOT, 'train+crawl/train_final_1.json')
+TRAIN_ANN = os.path.join(DATA_ROOT, 'train_final/train_final.json')
 VAL_ANN =   os.path.join(DATA_ROOT, 'test_final/test_final.json')
 TEST_ANN =  os.path.join(DATA_ROOT, 'test_final/test_final.json')
 randomness = dict(seed=42, deterministic=False)
@@ -16,7 +19,7 @@ randomness = dict(seed=42, deterministic=False)
 custom_imports = dict(
     imports=[
         'mmpose.evaluation.metrics.prosthetics_metrics_baseline',
-        'mmpose.models.heads.anatomy_aware_head',
+        'mmpose.models.heads.combined_anatomy_aware_head',
         'mmpose.datasets.datasets.custom.ld_pros_dataset',
     ],
     allow_failed_imports=False
@@ -54,15 +57,16 @@ optim_wrapper = dict(
 )
 
 param_scheduler = [
-    dict(type='LinearLR', begin=0, end=500, start_factor=0.001, by_epoch=False),
-    dict(type='CosineAnnealingLR', T_max=50, by_epoch=True)
+    dict(type='LinearLR', begin=0, end=100, start_factor=0.001, by_epoch=False),
+    dict(type='CosineAnnealingLR', T_max=10, by_epoch=True)
 ]
 
 train_cfg = dict(
     by_epoch=True,
-    max_epochs=50,
-    val_interval=5
+    max_epochs=10,  # 🌟 跑 10 个 Epoch 足够看出 Contrast Loss 是否有效
+    val_interval=1  # 🌟 每一轮都验一次，方便对比数据
 )
+
 
 model = dict(
     type='TopdownPoseEstimator',
@@ -74,22 +78,22 @@ model = dict(
     ),
     backbone=dict(
         type='mmpretrain.VisionTransformer',
-        arch='large',
+        arch='huge',
         img_size=(256, 192),
         patch_size=16,
         qkv_bias=True,
-        drop_path_rate=0.5,
+        drop_path_rate=0.55,
         with_cls_token=False,
         out_type='featmap',
         patch_cfg=dict(padding=2),
         init_cfg=dict(
             type='Pretrained',
             checkpoint='https://download.openmmlab.com/mmpose/'
-                       'v1/pretrained_models/mae_pretrain_vit_large_20230913.pth'),
+            'v1/pretrained_models/mae_pretrain_vit_huge_20230913.pth'),
     ),
     head=dict(
-        type='AnatomyAwareHead',
-        in_channels=1024,
+        type='CombinedAnatomyAwareHead',
+        in_channels=1280,
         out_channels=31,
         deconv_out_channels=(256, 256),
         deconv_kernel_sizes=(4, 4),
@@ -99,6 +103,8 @@ model = dict(
         ),
         decoder=codec,
         type_loss_weight=0.001,
+        tau=0.5,
+        bio_loss_weight=0.00003,
     ),
     test_cfg=dict(
         flip_mode='heatmap',
@@ -115,7 +121,6 @@ train_pipeline = [
     dict(type='CustomRandomFlip', direction='horizontal'),
     dict(type='ClampScale'),
     dict(type='RandomBBoxTransform'),
-    # use_udp 建议先关掉，除非你明确知道你在做什么
     dict(type='TopdownAffine', input_size=codec['input_size'], use_udp=True),
     dict(type='GenerateTarget', encoder=codec),
     dict(type='PackPoseInputs')
@@ -132,7 +137,7 @@ val_pipeline = [
 # 5. Dataloaders (核心修正处)
 # ==============================================================================
 train_dataloader = dict(
-    batch_size=64,
+    batch_size=32,
     num_workers=4,
     persistent_workers=True,
     sampler=dict(type='DefaultSampler', shuffle=True),
@@ -140,7 +145,7 @@ train_dataloader = dict(
         type=DATASET_TYPE,
         data_root=DATA_ROOT,
         ann_file=TRAIN_ANN,
-        data_prefix=dict(img='train+crawl/images/'),
+        data_prefix=dict(img='train_final/images/'),
         pipeline=train_pipeline,
     )
 )
@@ -200,18 +205,18 @@ default_hooks = dict(
     sampler_seed=dict(type='DistSamplerSeedHook'),
 )
 
-# visualizer = dict(
-#     type='PoseLocalVisualizer',
-#     vis_backends=[
-#         dict(type='LocalVisBackend'),  # 保留本地日志记录
-#         dict(
-#             type='WandbVisBackend',    # 🌟 开启 W&B 魔法
-#             init_kwargs=dict(
-#                 project='prosthetics-pose-estimation',  # W&B 上的项目名称
-#                 name='ViT-L-prosthetics',         # 这次 Run 的名字
-#                 entity='qitianye1104'                    # (可选) 你的 W&B 账号名或团队名
-#             )
-#         )
-#     ],
-#     name='visualizer'
-# )
+visualizer = dict(
+    type='PoseLocalVisualizer',
+    vis_backends=[
+        dict(type='LocalVisBackend'),  # 保留本地日志记录
+        dict(
+            type='WandbVisBackend',    # 🌟 开启 W&B 魔法
+            init_kwargs=dict(
+                project='prosthetics-pose-estimation',  # W&B 上的项目名称
+                name='ViT-H-prosthetics_CB_loss',         # 这次 Run 的名字
+                entity='qitianye1104'                    # (可选) 你的 W&B 账号名或团队名
+            )
+        )
+    ],
+    name='visualizer'
+)

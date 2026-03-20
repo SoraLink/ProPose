@@ -119,7 +119,7 @@ model = dict(
         type_loss_weight=0.0005,
         tau=0.2,
         bio_loss_weight=0.0003,
-        with_contrastive=True,
+        with_contrastive=False,
         decoder=codec,
     ),
     test_cfg=dict(
@@ -166,7 +166,7 @@ val_pipeline = [
 
 # data loaders
 train_dataloader = dict(
-    batch_size=8,  # 注意：如果你显存爆了，改小点，同时 lr 会被 auto_scale_lr 自动按比例缩小
+    batch_size=16,  # 注意：如果你显存爆了，改小点，同时 lr 会被 auto_scale_lr 自动按比例缩小
     num_workers=8,
     persistent_workers=True,
     pin_memory=True,
@@ -218,18 +218,18 @@ default_hooks = dict(
     sampler_seed=dict(type='DistSamplerSeedHook'),
 )
 
-# visualizer = dict(
-#     type='PoseLocalVisualizer',
-#     vis_backends=[
-#         dict(type='LocalVisBackend'),
-#         dict(
-#             type='WandbVisBackend',  # 🌟 开启 W&B 魔法
-#             init_kwargs=dict(
-#                 project='prosthetics-pose-estimation',
-#                 name='DEKR-512x512-prosthetics_combined_loss',  # 🌟 名字改成了 YOLOX-S
-#                 entity='qitianye1104'
-#             )
-#         )
-#     ],
-#     name='visualizer'
-# )
+visualizer = dict(
+    type='PoseLocalVisualizer',
+    vis_backends=[
+        dict(type='LocalVisBackend'),
+        dict(
+            type='WandbVisBackend',  # 🌟 开启 W&B 魔法
+            init_kwargs=dict(
+                project='prosthetics-pose-estimation',
+                name='DEKR-512x512-prosthetics_combined_loss',
+                entity='qitianye1104'
+            )
+        )
+    ],
+    name='visualizer'
+)

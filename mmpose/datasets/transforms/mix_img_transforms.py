@@ -488,7 +488,10 @@ class YOLOXMixUp(MixImageTransform):
         annos['area'] = [results['area'], aux_results['area'] * scale_ratio**2]
 
         for key in annos:
-            annos[key] = np.concatenate(annos[key])
+            try:
+                annos[key] = np.concatenate(annos[key])
+            except Exception:
+                raise ValueError(f'annos {key} is not a list')
 
         return mixup_img, annos
 

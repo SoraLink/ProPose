@@ -7,21 +7,21 @@ _base_ = [
 # ==============================================================================
 # 1. 基础与路径配置
 # ==============================================================================
-DATASET_TYPE = 'LDProsDataset'
+DATASET_TYPE = 'LDDataset'
 DATA_ROOT = '/home/sora/workspace/dataset/pros_final'
 DATA_MODE = 'topdown'
 
-TRAIN_ANN = os.path.join(DATA_ROOT, 'train_final/train_final.json')
-VAL_ANN =   os.path.join(DATA_ROOT, 'test_final/test_final.json')
-TEST_ANN =  os.path.join(DATA_ROOT, 'test_final/test_final.json')
+TRAIN_ANN = os.path.join(DATA_ROOT, 'train_final/ldpose_train_25kpts.json')
+VAL_ANN = os.path.join(DATA_ROOT, 'test_final/ldpose_test_25kpts.json')
+TEST_ANN = os.path.join(DATA_ROOT, 'test_final/ldpose_test_25kpts.json')
 randomness = dict(seed=42, deterministic=False)
 
 custom_imports = dict(
     imports=[
         'mmpose.evaluation.metrics.prosthetics_metrics_baseline',
         # 🌟 指向你新写的 RTM Head 文件
-        'mmpose.models.heads.combined_RTM_anatomy_aware_head',
-        'mmpose.datasets.datasets.custom.ld_pros_dataset',
+        'mmpose.models.heads.ldpose_RTM_anatomy_aware_head',
+        'mmpose.datasets.datasets.custom.ld_dataset',
     ],
     allow_failed_imports=False
 )
@@ -74,8 +74,8 @@ model = dict(
         type='CSPNeXt',
         arch='P5',
         expand_ratio=0.5,
-        deepen_factor=1,  # 这是 RTMPose-M 的参数，如果是 L 请改为 1.0
-        widen_factor=1,   # 这是 RTMPose-M 的参数，如果是 L 请改为 1.0
+        deepen_factor=0.33,  # 这是 RTMPose-M 的参数，如果是 L 请改为 1.0
+        widen_factor=0.5,   # 这是 RTMPose-M 的参数，如果是 L 请改为 1.0
         out_indices=(4, ),
         channel_attention=True,
         norm_cfg=dict(type='SyncBN'),
@@ -85,13 +85,13 @@ model = dict(
             type='Pretrained',
             prefix='backbone.',
             checkpoint='https://download.openmmlab.com/mmpose/v1/projects/'
-                       'rtmposev1/cspnext-l_udp-aic-coco_210e-256x192-273b7631_20230130.pth'  # noqa
+            'rtmposev1/cspnext-s_udp-aic-coco_210e-256x192-92f5a029_20230130.pth'
         )
     ),
     head=dict(
-        type='CombinedRTMAnatomyAwareHead', # 🌟 使用你写的 RTM 版 Head
-        in_channels=1024, # 注意：RTMPose-M 这里是 768，如果是 L 则是 1024
-        out_channels=31,
+        type='LDPoseRTMHead', # 🌟 使用你写的 RTM 版 Head
+        in_channels=512, # 注意：RTMPose-M 这里是 768，如果是 L 则是 1024
+        out_channels=25,
         input_size=codec['input_size'],
         in_featuremap_size=tuple([s // 32 for s in codec['input_size']]),
         simcc_split_ratio=codec['simcc_split_ratio'],
@@ -110,10 +110,7 @@ model = dict(
             use_target_weight=True,
             beta=10.,
             label_softmax=True),
-        type_loss_weight=0.1,
-        tau=0.2,
-        bio_loss_weight=0.03, # 🌟 对比损失权重
-        with_contrastive=False,
+        ld_loss_weight=1.0,
         decoder=codec
     ),
     test_cfg=dict(flip_test=True)
@@ -174,8 +171,8 @@ test_dataloader = dict(
 # ==============================================================================
 # 6. Evaluators
 # ==============================================================================
-val_evaluator = dict(type='ProstheticsMetric', ann_file=VAL_ANN, score_thr=0.3)
-test_evaluator = dict(type='ProstheticsMetric', ann_file=TEST_ANN, score_thr=0.3)
+val_evaluator = dict(type='CocoMetric', ann_file=VAL_ANN)
+test_evaluator = dict(type='CocoMetric', ann_file=TEST_ANN)
 
 # ==============================================================================
 # 7. Hooks & Visualizer
@@ -198,18 +195,18 @@ default_hooks = dict(
     sampler_seed=dict(type='DistSamplerSeedHook'),
 )
 
-visualizer = dict(
-    type='PoseLocalVisualizer',
-    vis_backends=[
-        dict(type='LocalVisBackend'),
-        dict(
-            type='WandbVisBackend',
-            init_kwargs=dict(
-                project='prosthetics-pose-estimation',
-                name='RTMPose-l-prosthetics_combined_loss-detach', # 🌟 区分你的 ViT Run
-                entity='qitianye1104'
-            )
-        )
-    ],
-    name='visualizer'
-)
+# visualizer = dict(
+#     type='PoseLocalVisualizer',
+#     vis_backends=[
+#         dict(type='LocalVisBackend'),
+#         dict(
+#             type='WandbVisBackend',
+#             init_kwargs=dict(
+#                 project='prosthetics-pose-estimation',
+#                 name='RTMPose-s-prosthetics_combined_loss', # 🌟 区分你的 ViT Run
+#                 entity='qitianye1104'
+#             )
+#         )
+#     ],
+#     name='visualizer'
+# )

@@ -6,7 +6,7 @@ _base_ = '../../../_base_/default_runtime.py'
 # 1. 基础路径与自定义模块导入
 # ==============================================================================
 DATASET_TYPE = 'LDProsYoloDataset'
-DATA_ROOT = '/home/xins/workspace/pros_final'
+DATA_ROOT = '/home/sora/workspace/dataset/pros_final'
 DATA_MODE = 'bottomup'  # 🌟 YOLO 是 Bottom-up，这里必须改！
 
 TRAIN_ANN = os.path.join(DATA_ROOT, 'train_final/train_final.json')
@@ -29,7 +29,7 @@ custom_imports = dict(
 train_cfg = dict(
     _delete_=True,
     type='EpochBasedTrainLoop',
-    max_epochs=100,
+    max_epochs=50,
     val_interval=10,
     dynamic_intervals=[(80, 1)])  # 最后20轮(Stage2)每个epoch都验证
 

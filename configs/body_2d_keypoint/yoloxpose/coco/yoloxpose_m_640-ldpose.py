@@ -1,4 +1,4 @@
-_base_ = './yoloxpose_s-640.py'
+_base_ = './yoloxpose_s-640-ldpose.py'
 
 widen_factor = 0.75
 deepen_factor = 0.67
@@ -24,7 +24,7 @@ visualizer = dict(
             type='WandbVisBackend',  # 🌟 开启 W&B 魔法
             init_kwargs=dict(
                 project='prosthetics-pose-estimation',
-                name='YOLOX-L-prosthetics_combined_loss-detach',  # 🌟 名字改成了 YOLOX-S
+                name='YOLOX-L-prosthetics_combined_loss-ldpose',  # 🌟 名字改成了 YOLOX-S
                 entity='qitianye1104'
             )
         )
