@@ -2,35 +2,35 @@ import os.path
 
 
 _base_ = [
-    '../../../_base_/default_runtime.py',
+    '../_base_/default_runtime.py',
 ]
 
 DATASET_TYPE = 'AmputationCOCO'
 DATA_ROOT = './data'
 DATA_MODE = 'topdown'
 
-TRAIN_ANN = os.path.join(DATA_ROOT, 'annotations/person_keypoints_train2014.json')
-VAL_ANN =   os.path.join(DATA_ROOT, 'annotations/person_keypoints_val2014.json')
-TEST_ANN =  os.path.join(DATA_ROOT, 'annotations/person_keypoints_val2014.json')
+TRAIN_ANN = 'annotations/person_keypoints_train2014.json'
+VAL_ANN =   'annotations/person_keypoints_val2014.json'
+TEST_ANN =  'annotations/person_keypoints_val2014.json'
 randomness = dict(seed=42, deterministic=False)
 
 amputation_types = [
     {'name': 'Above Left Elbow', 'limb_id': 'left_arm', 'p': 5, 'd': 7, 'r': 17, 'lost_pts': [7, 9],
-     'dp_parts': [15, 17]},
+     'dp_parts': [10]},
     {'name': 'Below Left Elbow', 'limb_id': 'left_arm', 'p': 7, 'd': 9, 'r': 19, 'lost_pts': [9],
-     'dp_parts': [19, 21]},
+     'dp_parts': [12]},
     {'name': 'Above Right Elbow', 'limb_id': 'right_arm', 'p': 6, 'd': 8, 'r': 18, 'lost_pts': [8, 10],
-     'dp_parts': [16, 18]},
+     'dp_parts': [11]},
     {'name': 'Below Right Elbow', 'limb_id': 'right_arm', 'p': 8, 'd': 10, 'r': 20, 'lost_pts': [10],
-     'dp_parts': [20, 22]},
+     'dp_parts': [13]},
     {'name': 'Above Left Knee', 'limb_id': 'left_leg', 'p': 11, 'd': 13, 'r': 21, 'lost_pts': [13, 15],
-     'dp_parts': [8, 10]},
+     'dp_parts': [7]},
     {'name': 'Below Left Knee', 'limb_id': 'left_leg', 'p': 13, 'd': 15, 'r': 23, 'lost_pts': [15],
-     'dp_parts': [12, 14]},
+     'dp_parts': [9]},
     {'name': 'Above Right Knee', 'limb_id': 'right_leg', 'p': 12, 'd': 14, 'r': 22, 'lost_pts': [14, 16],
-     'dp_parts': [7, 9]},
+     'dp_parts': [6]},
     {'name': 'Below Right Knee', 'limb_id': 'right_leg', 'p': 14, 'd': 16, 'r': 24, 'lost_pts': [16],
-     'dp_parts': [11, 13]},
+     'dp_parts': [8]},
 ]
 
 custom_imports = dict(
@@ -133,13 +133,12 @@ train_pipeline = [
     dict(type='LoadImage', imdecode_backend='pillow'),
     dict(type='GetBBoxCenterScale'),
     dict(
-        type='SimulateAmputation',
-        dense_pose_root='./data/densepose_masks',
+        type='SimulateAmputationMath',
         amputation_types=amputation_types,
         prob=0.5,
         is_train=True),
     dict(type='RandomFlip', direction='horizontal'),
-    dict(type='RandomBBoxTransform', shift_factor=0.1, scale_factor=0.1),
+    dict(type='RandomBBoxTransform'),
     dict(type='TopdownAffine', input_size=target_codec['input_size'], use_udp=True),
     dict(type='GenerateAmputationHeatmaps',
          input_codec_cfg=input_codec,
@@ -152,8 +151,7 @@ val_pipeline = [
     dict(type='LoadImage', imdecode_backend='pillow'),
     dict(type='GetBBoxCenterScale'),
     dict(
-        type='SimulateAmputation',
-        dense_pose_root='./data/densepose_masks',
+        type='SimulateAmputationMath',
         amputation_types=amputation_types,
         prob=0.5,
         is_train=False),
@@ -206,18 +204,18 @@ default_hooks = dict(
     sampler_seed=dict(type='DistSamplerSeedHook'),
 )
 
-visualizer = dict(
-    type='PoseLocalVisualizer',
-    vis_backends=[
-        dict(type='LocalVisBackend'),
-        dict(
-            type='WandbVisBackend',
-            init_kwargs=dict(
-                project='distal-prediction',
-                name='heatmap-input',
-                entity='qitianye1104'
-            )
-        )
-    ],
-    name='visualizer'
-)
+# visualizer = dict(
+#     type='PoseLocalVisualizer',
+#     vis_backends=[
+#         dict(type='LocalVisBackend'),
+#         dict(
+#             type='WandbVisBackend',
+#             init_kwargs=dict(
+#                 project='distal-prediction',
+#                 name='heatmap-input',
+#                 entity='qitianye1104'
+#             )
+#         )
+#     ],
+#     name='visualizer'
+# )

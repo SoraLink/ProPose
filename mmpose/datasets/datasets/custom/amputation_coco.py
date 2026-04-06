@@ -82,5 +82,5 @@ class AmputationCOCO(BaseCocoStyleDataset):
 
         data_info['keypoints'] = new_kpts
         data_info['keypoints_visible'] = new_vis
-        data_info['ann_id'] = raw_data_info['id']
+        data_info['ann_id'] = raw_data_info['raw_ann_info']['id']
         return data_info

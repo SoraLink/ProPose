@@ -1306,33 +1306,22 @@ class ClampScale:
 class SimulateAmputation(BaseTransform):
     def __init__(self,
                  dense_pose_root,
-                 amputation_typeset,
+                 amputation_types,
                  prob=0.5,
                  is_train=True,):
         super().__init__()
         self.dense_pose_root = dense_pose_root
-        self.amputation_types = [
-            {'name': 'Above Left Elbow', 'limb_id': 'left_arm', 'p': 5, 'd': 7, 'r': 17, 'lost_pts': [7, 9],
-             'dp_parts': [15, 17]},
-            {'name': 'Below Left Elbow', 'limb_id': 'left_arm', 'p': 7, 'd': 9, 'r': 19, 'lost_pts': [9],
-             'dp_parts': [19, 21]},
-            {'name': 'Above Right Elbow', 'limb_id': 'right_arm', 'p': 6, 'd': 8, 'r': 18, 'lost_pts': [8, 10],
-             'dp_parts': [16, 18]},
-            {'name': 'Below Right Elbow', 'limb_id': 'right_arm', 'p': 8, 'd': 10, 'r': 20, 'lost_pts': [10],
-             'dp_parts': [20, 22]},
-            {'name': 'Above Left Knee', 'limb_id': 'left_leg', 'p': 11, 'd': 13, 'r': 21, 'lost_pts': [13, 15],
-             'dp_parts': [8, 10]},
-            {'name': 'Below Left Knee', 'limb_id': 'left_leg', 'p': 13, 'd': 15, 'r': 23, 'lost_pts': [15],
-             'dp_parts': [12, 14]},
-            {'name': 'Above Right Knee', 'limb_id': 'right_leg', 'p': 12, 'd': 14, 'r': 22, 'lost_pts': [14, 16],
-             'dp_parts': [7, 9]},
-            {'name': 'Below Right Knee', 'limb_id': 'right_leg', 'p': 14, 'd': 16, 'r': 24, 'lost_pts': [16],
-             'dp_parts': [11, 13]},
-        ]
+        self.amputation_types = amputation_types
         self.prob = prob
         self.is_train = is_train
 
     def transform(self, results):
+        img_id = results.get('img_id')
+        ann_id = results.get('ann_id')
+        mask_filename = f"{img_id:012d}_{ann_id}.png"
+        mask_path = os.path.join(self.dense_pose_root, mask_filename)
+        if not os.path.exists(mask_path):
+            return None
         if self.is_train:
             rng = np.random
         else:
@@ -1341,7 +1330,7 @@ class SimulateAmputation(BaseTransform):
 
         kpts = results['keypoints'].copy()
         vis = results['keypoints_visible'].copy()
-        bbox = results['bbox'].copy()
+        vis[vis > 0] = 1
         img_h, img_w = results['img_shape'][:2]
         amputated_limbs = set()
 
@@ -1362,7 +1351,7 @@ class SimulateAmputation(BaseTransform):
                 if vis[0, p] > 0 and vis[0, d] > 0:
                     try:
                         mask = self._load_densepose_mask(
-                            results['img_id'], results['ann_id'], dp_parts, bbox, (img_h, img_w))
+                            results['img_id'], results['ann_id'], dp_parts, (img_h, img_w))
 
                         cut_ratio = rng.uniform(0.1, 0.9)
                         R_r = self._sample_residual_point(
@@ -1371,11 +1360,14 @@ class SimulateAmputation(BaseTransform):
                         for pt_idx in lost_pts:
                             vis[0, pt_idx] = 0
 
-                        vis[0, d] = 1
+                        vis[0, d] = 2
                         kpts[0, r] = R_r
-                        vis[0, r] = 2
+                        vis[0, r] = 1
 
                         amputated_limbs.add(limb_id)
+
+                    except ValueError:
+                        continue
 
                     except Exception as e:
                         print(e)
@@ -1385,31 +1377,22 @@ class SimulateAmputation(BaseTransform):
         results['keypoints_visible'] = vis
         return results
 
-    def _load_densepose_mask(self, image_id, ann_id, dp_parts, bbox, img_hw):
+    def _load_densepose_mask(self, image_id, ann_id, dp_parts, img_hw):
         cur_h, cur_w = img_hw
         mask_filename = f"{image_id:012d}_{ann_id}.png"
-        mask_path = os.path.join(self.dense_pose_ann_file, mask_filename)
+        mask_path = os.path.join(self.dense_pose_root, mask_filename)
 
         if not os.path.exists(mask_path):
             raise ValueError('Requested mask file does not exist: ' + mask_path)
 
         person_isolated_matrix = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
+
         limb_mask_full_res = np.isin(person_isolated_matrix, dp_parts).astype(np.uint8)
-
-        x, y, w, h = [int(v) for v in bbox]
-        H_orig, W_orig = limb_mask_full_res.shape
-
-        x1, y1 = max(0, x), max(0, y)
-        x2, y2 = min(W_orig, x + w), min(H_orig, y + h)
-
-        if x2 <= x1 or y2 <= y1:
-            raise ValueError('Requested mask is out of bounds: ' + mask_path)
-
-        patch_mask = limb_mask_full_res[y1:y2, x1:x2]
-
+        if not np.any(limb_mask_full_res):
+            raise ValueError(f"Occlusion: mask for dp_parts {dp_parts} is empty.")
         limb_mask_resized = cv2.resize(
-            patch_mask,
-            (cur_h, cur_w),
+            limb_mask_full_res,
+            (cur_w, cur_h),
             interpolation=cv2.INTER_NEAREST
         )
 
@@ -1456,7 +1439,7 @@ class SimulateAmputation(BaseTransform):
 
         max_tries = 10
         for _ in range(max_tries):
-            offset = rng.normal(loc=0.0, scale=sigma) if rng is not None else np.random.normal(loc=0.0, scale=sigma)
+            offset = rng.normal(loc=0.0, scale=sigma)
 
             if -dist_neg <= offset <= dist_pos:
                 R_r_new = R_base + offset * unit_u
@@ -1469,6 +1452,96 @@ class SimulateAmputation(BaseTransform):
 
 
 @TRANSFORMS.register_module()
+class SimulateAmputationMath(BaseTransform):
+    def __init__(self, amputation_types, prob=0.5, is_train=True):
+        super().__init__()
+        self.amputation_types = amputation_types
+        self.prob = prob
+        self.is_train = is_train
+
+    def transform(self, results):
+        if self.is_train:
+            rng = np.random
+        else:
+            seed = results.get('ann_id', 0)
+            rng = np.random.RandomState(seed)
+
+        if 'transformed_keypoints' in results:
+            kpts = results['transformed_keypoints']
+        else:
+            kpts = results['keypoints']
+
+        vis = results['keypoints_visible'].copy()
+        amputated_limbs = set()
+
+        if 'amputated_d_pts' not in results:
+            results['amputated_d_pts'] = []
+
+        indices = list(range(len(self.amputation_types)))
+        rng.shuffle(indices)
+
+        for idx in indices:
+            amp = self.amputation_types[idx]
+            limb_id = amp['limb_id']
+
+            if limb_id in amputated_limbs:
+                continue
+
+            if rng.rand() < self.prob:
+                p, d, r = amp['p'], amp['d'], amp['r']
+                lost_pts = amp['lost_pts']
+
+                if vis[0, p] > 0 and vis[0, d] > 0:
+                    cut_ratio = rng.uniform(0.1, 0.9)
+
+                    R_r = self._sample_residual_point_math(
+                        kpts[0, p], kpts[0, d], cut_ratio, rng)
+
+                    for pt_idx in lost_pts:
+                        vis[0, pt_idx] = 0
+
+                    kpts[0, r] = R_r
+                    vis[0, r] = 2
+
+                    results['amputated_d_pts'].append(d)
+                    amputated_limbs.add(limb_id)
+
+        if 'transformed_keypoints' in results:
+            results['transformed_keypoints'] = kpts
+        else:
+            results['keypoints'] = kpts
+
+        results['keypoints_visible'] = vis
+        return results
+
+    def _sample_residual_point_math(self, pt_p, pt_d, cut_ratio, rng):
+
+        vec_bone = pt_d - pt_p
+        bone_length = np.linalg.norm(vec_bone)
+
+        if bone_length < 1e-5:
+            return pt_p
+
+        R_base = pt_p + cut_ratio * vec_bone
+
+        unit_v = vec_bone / bone_length
+        unit_u = np.array([-unit_v[1], unit_v[0]])
+
+
+        sigma = bone_length * 0.05
+        offset = rng.normal(loc=0.0, scale=sigma)
+
+        R_r_new = R_base + offset * unit_u
+
+        return R_r_new
+
+
+import numpy as np
+from mmcv.transforms import BaseTransform
+from mmpose.registry import TRANSFORMS, KEYPOINT_CODECS
+
+
+@TRANSFORMS.register_module()
 class GenerateAmputationHeatmaps(BaseTransform):
     def __init__(self, input_codec_cfg, target_codec_cfg, amputation_types):
         super().__init__()
@@ -1477,38 +1550,44 @@ class GenerateAmputationHeatmaps(BaseTransform):
         self.amputation_types = amputation_types
 
     def transform(self, results):
-        kpts = results['keypoints']  # [1, 25, 2]
+        kpts = results['transformed_keypoints']  # [1, 25, 2]
         vis = results['keypoints_visible'].copy()  # [1, 25]
 
+        amputated_d_pts = results.get('amputated_d_pts', [])
+
         vis_in = vis.copy()
-        vis_in[vis_in == 1] = 0
+        for d_idx in amputated_d_pts:
+            vis_in[0, d_idx] = 0
 
-        input_hm, _ = self.input_codec.encode(kpts, vis_in)
+        encoded_input = self.input_codec.encode(kpts, vis_in)
+        input_hm = encoded_input['heatmaps']
 
-        results['img'] = input_hm[0].transpose(1, 2, 0)
-
+        results['img'] = input_hm.transpose(1, 2, 0)
         results['img_norm_cfg'] = None
 
-        vis_gt = vis.copy()
-        vis_gt[vis_gt == 2] = 0
 
-        gt_hm_full, gt_weights_full = self.target_codec.encode(kpts, vis_gt)
-        gt_hm_full = gt_hm_full[0]  # [25, H_out, W_out]
-        gt_weights_full = gt_weights_full[0]  # [25]
+        vis_gt = np.zeros_like(vis)
+
+        for d_idx in amputated_d_pts:
+            vis_gt[0, d_idx] = 2
+
+        encoded_gt = self.target_codec.encode(kpts, vis_gt)
+        gt_hm_full = encoded_gt['heatmaps']  # [25, H_out, W_out]
+        gt_weights_full = encoded_gt['keypoint_weights'][0]  # [25]
 
         num_targets = len(self.amputation_types)
         _, H_out, W_out = gt_hm_full.shape
 
         gt_heatmap = np.zeros((num_targets, H_out, W_out), dtype=np.float32)
-        keypoint_weights = np.zeros((num_targets,), dtype=np.float32)
+        keypoint_weights = np.zeros((1, num_targets), dtype=np.float32)  # [1, 8] 维度正确
 
         for i, amp in enumerate(self.amputation_types):
             d_idx = amp['d']
 
             gt_heatmap[i] = gt_hm_full[d_idx]
-            keypoint_weights[i] = gt_weights_full[d_idx]
+            keypoint_weights[0, i] = gt_weights_full[d_idx]
 
-        results['gt_heatmap'] = gt_heatmap  # [8, H_out, W_out]
-        results['keypoint_weights'] = keypoint_weights  # [8]
+        results['heatmaps'] = gt_heatmap
+        results['keypoint_weights'] = keypoint_weights
 
         return results
