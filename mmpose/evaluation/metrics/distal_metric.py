@@ -17,15 +17,15 @@ class DistalOKSMetric(BaseMetric):
             self.k_vars = (np.array(sigmas) * 2) ** 2
 
         for data_sample in data_samples:
-            pred_coords = data_sample.pred_instances.keypoints[0]
-            gt_coords = data_sample.gt_instances.keypoints[0]
-            weights = data_sample.gt_instances.keypoint_weights[0]
+            pred_coords = data_sample['pred_instances']['keypoints'][0]
+            gt_coords = data_sample['gt_instances']['keypoints'][0]
+            weights = data_sample['gt_instances']['keypoint_weights'][0]
 
             active_indices = np.where(weights > 0)[0]
             if len(active_indices) == 0:
                 continue
 
-            bbox = data_sample.gt_instances.bboxes[0]
+            bbox = data_sample['gt_instances']['bboxes'][0]
             area = (bbox[2] - bbox[0]) * (bbox[3] - bbox[1])
             area = max(area, 1.0)
 

@@ -83,4 +83,15 @@ class AmputationCOCO(BaseCocoStyleDataset):
         data_info['keypoints'] = new_kpts
         data_info['keypoints_visible'] = new_vis
         data_info['ann_id'] = raw_data_info['raw_ann_info']['id']
+        data_info['instance_mapping_table'] = dict(
+        bbox='bboxes',
+        bbox_score='bbox_scores',
+        keypoints='keypoints',
+        keypoints_cam='keypoints_cam',
+        keypoints_visible='keypoints_visible',
+        bbox_scale='bbox_scales',
+        head_size='head_size',
+        keypoint_weights='keypoint_weights',
+
+    )
         return data_info

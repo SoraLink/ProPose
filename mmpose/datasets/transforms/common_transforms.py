@@ -1569,7 +1569,7 @@ class GenerateAmputationHeatmaps(BaseTransform):
         vis_gt = np.zeros_like(vis)
 
         for d_idx in amputated_d_pts:
-            vis_gt[0, d_idx] = 2
+            vis_gt[0, d_idx] = 1
 
         encoded_gt = self.target_codec.encode(kpts, vis_gt)
         gt_hm_full = encoded_gt['heatmaps']  # [25, H_out, W_out]
