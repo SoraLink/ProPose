@@ -22,6 +22,34 @@ ProPose aims to address topology mismatch and representation bias in existing hu
 
 ---
 
+## Installation
+
+This repository is based on MMPose.
+
+
+### Setup
+
+```bash
+conda create -n propose python=3.10 -y
+conda activate propose
+
+# Install PyTorch according to your CUDA version.
+# The following versions are used in our tested environment.
+pip install torch==2.9.0+cu130 torchvision==0.24.0+cu130 torchaudio==2.9.0+cu130 --index-url https://download.pytorch.org/whl/cu130
+
+# Install OpenMMLab dependencies.
+pip install openmim==0.3.9
+mim install mmengine==0.10.7
+mim install mmcv==2.1.0
+mim install mmdet==3.2.0
+
+# Install additional dependencies.
+pip install numpy==2.2.6 opencv-python==4.10.0.84 pycocotools==2.0.11 xtcocotools==1.14.3
+```
+
+If the exact CUDA 13.0 PyTorch wheel is unavailable on your system, please install the PyTorch version that matches your CUDA driver from the official PyTorch installation instructions, while keeping the OpenMMLab package versions consistent with the tested environment above.
+
+---
 ## Omni-Pose Protocol
 
 The proposed **Omni-Pose** protocol unifies pose representation across intact, residual, and prosthetic limbs. Each keypoint is associated with both spatial coordinates and a semantic type:
@@ -59,32 +87,3 @@ Qualitative comparisons show that models trained with ProPose and Pro-Loss can b
 <p align="center">
   <img src="assets/qualitative_results.png" width="95%">
 </p>
-
----
-
-## Installation
-
-This repository is based on MMPose.
-
-
-### Setup
-
-```bash
-conda create -n propose python=3.10 -y
-conda activate propose
-
-# Install PyTorch according to your CUDA version.
-# The following versions are used in our tested environment.
-pip install torch==2.9.0+cu130 torchvision==0.24.0+cu130 torchaudio==2.9.0+cu130 --index-url https://download.pytorch.org/whl/cu130
-
-# Install OpenMMLab dependencies.
-pip install openmim==0.3.9
-mim install mmengine==0.10.7
-mim install mmcv==2.1.0
-mim install mmdet==3.2.0
-
-# Install additional dependencies.
-pip install numpy==2.2.6 opencv-python==4.10.0.84 pycocotools==2.0.11 xtcocotools==1.14.3
-```
-
-If the exact CUDA 13.0 PyTorch wheel is unavailable on your system, please install the PyTorch version that matches your CUDA driver from the official PyTorch installation instructions, while keeping the OpenMMLab package versions consistent with the tested environment above.
