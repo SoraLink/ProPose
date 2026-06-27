@@ -8,6 +8,11 @@ Official implementation for **ProPose: Topology-Unified 2D Pose Estimation acros
 
 ProPose introduces a topology-unified 2D human pose estimation benchmark and learning framework for humans with intact, residual, and prosthetic limbs. This repository is built upon [MMPose](https://github.com/open-mmlab/mmpose), with modifications for the Omni-Pose annotation protocol, ProPose dataset loading, semantic keypoint type prediction, Pro-Loss, and evaluation metrics.
 
+## Dataset
+
+The ProPose dataset is available at [Hugging Face](https://huggingface.co/datasets/Soralink/ProPose).
+
+The released ZIP archive contains the train, validation, and test splits. Each split includes image data and the corresponding annotation files following the proposed Omni-Pose annotation format.
 > **Note:** This codebase is modified from MMPose. We thank the MMPose contributors for their excellent open-source toolbox.
 
 ---
